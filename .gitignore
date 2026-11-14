@@ -1,0 +1,12 @@
+build/
+build-*/
+*.elf
+*.hex
+*.bin
+*.map
+*.o
+*.d
+tools/openocd-at32/
+__pycache__/
+*.pyc
+.projectmem/
