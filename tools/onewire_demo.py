@@ -84,7 +84,7 @@ class Bridge:
         ok = self.dll.CH341StreamI2C(0, 2, w, count, buf)
         return ok, bytes(buf)
 
-    def read_map(self, size=256, chunk=64):
+    def read_map(self, size=256, chunk=256):
         out = bytearray()
         for off in range(0, size, chunk):
             n = min(chunk, size - off)

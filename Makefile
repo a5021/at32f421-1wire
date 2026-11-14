@@ -12,11 +12,11 @@ MCU      := -mcpu=cortex-m4 -mthumb -mfloat-abi=soft
 INCLUDES := -Isrc -Ivendor/at32f421
 DEFS     := -DAT32F421F8P7
 
-CFLAGS   := $(MCU) -std=gnu11 -O2 -g3 -Wall -Wextra -Wshadow \
+CFLAGS   := $(MCU) -std=gnu11 -O2 -g3 -flto -Wall -Wextra -Wshadow \
             -ffunction-sections -fdata-sections $(INCLUDES) $(DEFS) -MMD -MP
 
 LDSCRIPT := vendor/at32f421/AT32F421x8_FLASH.ld
-LDFLAGS  := $(MCU) -T$(LDSCRIPT) \
+LDFLAGS  := $(MCU) -flto -T$(LDSCRIPT) \
             --specs=nano.specs --specs=nosys.specs \
             -Wl,--gc-sections -Wl,--print-memory-usage \
             -Wl,-Map=$(BUILD)/$(TARGET).map

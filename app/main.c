@@ -85,9 +85,11 @@ static uint32_t ok_count;
 static uint32_t err_count;
 static uint32_t cycle;
 
-volatile uint8_t  g_regs[256];
 volatile uint8_t  g_cmd;
 volatile uint32_t g_i2c_speed;
+
+static uint8_t  g_regs[256];
+static uint32_t roms_dirty = 1;
 
 static uint32_t reg_ptr;
 static uint32_t rx_mode;
@@ -141,13 +143,15 @@ static void i2c_hw_init(void)
 static void i2c_poll(void)
 {
     uint32_t sts1 = I2C2->sts1;
-    uint32_t sts2 = I2C2->sts2;
+    uint32_t relevant = sts1 & ~STS1_TDBE;
 
-    if ((sts1 == 0u) && (sts2 == 0u)) {
+    if ((relevant == 0u) && (tx_mode == 0u)) {
         return;
     }
 
     if ((sts1 & STS1_ADDR7F) != 0u) {
+        uint32_t sts2 = I2C2->sts2;
+
         (void)I2C2->sts1;
         (void)I2C2->sts2;
 
@@ -259,25 +263,22 @@ static void publish(void)
     g_regs[REG_CYCLE_H] = (uint8_t)(cycle >> 8);
     g_regs[REG_SPEED] = (uint8_t)g_i2c_speed;
 
-    for (uint32_t i = 0u; i < DEV_MAX; i++) {
+    for (uint32_t i = 0u; (i < ds18b20_count) && (i < DEV_MAX); i++) {
         g_regs[REG_TEMP + 2u * i] = (uint8_t)((uint16_t)temp_raw[i] & 0xFFu);
         g_regs[REG_TEMP + 2u * i + 1u] = (uint8_t)((uint16_t)temp_raw[i] >> 8);
         g_regs[REG_TEMP_STATUS + i] = temp_status[i];
     }
 
-    for (uint32_t i = 0u; i < 8u; i++) {
-        g_regs[REG_EEPROM + i] = eeprom_data[i];
-    }
+    memcpy((void *)&g_regs[REG_EEPROM], eeprom_data, 8u);
     g_regs[REG_EEPROM_STATUS] = eeprom_status;
 
-    for (uint32_t i = 0u; i < 9u; i++) {
-        g_regs[REG_SCRATCH + i] = sp_sel[i];
-    }
+    memcpy((void *)&g_regs[REG_SCRATCH], sp_sel, 9u);
 
-    for (uint32_t i = 0u; i < DEV_MAX; i++) {
-        for (uint32_t b = 0u; b < 8u; b++) {
-            g_regs[REG_ROMS + 8u * i + b] = (i < device_count) ? roms[i][b] : 0u;
+    if (roms_dirty != 0u) {
+        for (uint32_t i = 0u; (i < device_count) && (i < DEV_MAX); i++) {
+            memcpy((void *)&g_regs[REG_ROMS + 8u * i], roms[i], 8u);
         }
+        roms_dirty = 0u;
     }
 }
 
@@ -314,6 +315,7 @@ static void manager_search(void)
     search_started = 0;
     if (st == OW_END) {
         search_done = 1;
+        roms_dirty = 1;
     } else {
         search_error = (uint32_t)st;
     }
