@@ -10,3 +10,4 @@ tools/openocd-at32/
 __pycache__/
 *.pyc
 .projectmem/
+.codegraph/

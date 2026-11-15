@@ -24,6 +24,9 @@ the conversion runs.
 * CH3 = output (PWM mode B), CH2 compare feeds the next low phase through
   DMA1 channel 3.
 * CH4 captures the counter at each rising edge into DMA1 channel 4.
+* One-cycle mode: a pass stops itself at its update event. CH3's compare is
+  preloaded with 0 for that event, so the line is released HIGH by hardware
+  (multi-slot writes get that 0 from the DMA feed instead).
 * No interrupts: every `_start` arms one hardware pass, `_poll` waits for the
   timer update flag.
 

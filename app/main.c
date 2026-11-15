@@ -329,34 +329,26 @@ static void manager_poll(void)
 {
     ow_status_t st;
 
-    if (g_cmd != 0u) {
-        if (manager_state != MGR_WAIT) {
-            return;
-        }
-        if (!ow_delay_poll()) {
-            return;
-        }
-        {
-            uint8_t cmd = g_cmd;
-            g_cmd = 0;
+    if ((g_cmd != 0u) && (manager_state == MGR_WAIT) && ow_delay_poll()) {
+        uint8_t cmd = g_cmd;
+        g_cmd = 0;
 
-            if (cmd == 1u) {
-                manager_state = MGR_SEARCH;
-                search_started = 0;
-                search_done = 0;
-                g_regs[REG_FLAGS] |= FLAG_BUSY;
-                return;
-            }
-            if (cmd == 2u) {
-                eeprom_started = 0;
-                manager_state = MGR_EEPROM;
-                g_regs[REG_FLAGS] |= FLAG_BUSY;
-                return;
-            }
-            if (cmd == 3u) {
-                cycle = 0;
-                clear_results();
-            }
+        if (cmd == 1u) {
+            manager_state = MGR_SEARCH;
+            search_started = 0;
+            search_done = 0;
+            g_regs[REG_FLAGS] |= FLAG_BUSY;
+            return;
+        }
+        if (cmd == 2u) {
+            eeprom_started = 0;
+            manager_state = MGR_EEPROM;
+            g_regs[REG_FLAGS] |= FLAG_BUSY;
+            return;
+        }
+        if (cmd == 3u) {
+            cycle = 0;
+            clear_results();
         }
         return;
     }

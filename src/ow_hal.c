@@ -91,11 +91,19 @@ bool ow_hal_done(void)
         return false;
     }
     TMR1->ists = 0u;
-    /* Stop the pass and release the pin to the GPIO open-drain/ODT path. */
-    TMR1->cctrl = 0u;
-    TMR1->ctrl1_bit.tmren = 0u;
+    /* The pass is over: one-cycle mode stopped the counter at the closing
+     * update event, and the CH3 compare value preloaded for that same event
+     * left the line released HIGH.  Nothing to stop or release here. */
     ow_active = false;
     return true;
+}
+
+/* Start one hardware pass in one-cycle mode: the counter halts at the pass's
+ * update event (RPR sets how many periods away that is). */
+static void start_one_pulse(void)
+{
+    TMR1->ctrl1_bit.ocmen = 1u;
+    TMR1->ctrl1_bit.tmren = 1u;
 }
 
 void ow_hal_feed(const uint8_t *pulses, uint16_t slots)
@@ -133,7 +141,7 @@ void ow_hal_feed(const uint8_t *pulses, uint16_t slots)
     }
 
     TMR1->cctrl = (1u << 8);                    /* C3EN */
-    TMR1->ctrl1_bit.tmren = 1;
+    start_one_pulse();
 }
 
 static void capture_arm(volatile void *dst, uint16_t count, uint16_t first,
@@ -153,12 +161,18 @@ static void capture_arm(volatile void *dst, uint16_t count, uint16_t first,
               | ((uint32_t)OW_C4DF << 12);       /* CH4 filter */
     ow_ug();
 
+    /* Release value for the closing update event: CH3 is preloaded, so the
+     * zero waits in the shadow register and only reaches the compare when the
+     * pass ends.  At that same event one-cycle mode stops the counter with the
+     * output already HIGH, i.e. the line released by hardware. */
+    TMR1->c3dt = 0u;
+
     dma_prog(DMA1_CHANNEL4, &TMR1->c4dt, (uint32_t)dst, count,
              false, true, false, mwidth, DMA_W_HALFWORD);
 
     TMR1->iden = (1u << 12);                     /* C4DEN */
     TMR1->cctrl = (1u << 8) | (1u << 12);        /* C3EN | C4EN */
-    TMR1->ctrl1_bit.tmren = 1;
+    start_one_pulse();
 }
 
 void ow_hal_reset(void)
@@ -216,7 +230,7 @@ void ow_hal_wait(uint32_t us)
     ow_ug();
 
     TMR1->cctrl = (1u << 8);
-    TMR1->ctrl1_bit.tmren = 1;
+    start_one_pulse();
 }
 
 uint16_t ow_hal_captured(uint16_t programmed)
