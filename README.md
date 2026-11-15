@@ -17,10 +17,13 @@ the conversion runs.
 
 ## Engine
 
-* TMR1 runs at 1 MHz (`120 MHz / 120`, `div = 119`).
-* SCLK is 120 MHz from the 8 MHz HEXT (PLL ×15). If no crystal is fitted,
-  `clock_config()` falls back to HICK/2 (4 MHz, PLL ×30); the timer tick stays
-  1 µs either way.
+* TMR1 runs at 1 MHz. SCLK is 120 MHz from the 8 MHz HEXT (PLL ×15), or
+  HICK/2 (4 MHz, PLL ×30) on a crystal-less board. `clock_config()` decodes
+  the tree back from CRM and publishes it, so the timer divisor
+  (`APB2/1 MHz - 1`) and the I2C prescalers follow the clock that is really
+  running instead of a hardcoded 120 MHz.
+* I2C2 clocking is computed from APB1: `APB1/(2·SCL)` in standard mode,
+  `APB1/(3·SCL)` for 400 kHz fast mode with the 1:2 high:low ratio.
 * CH3 = output (PWM mode B), CH2 compare feeds the next low phase through
   DMA1 channel 3.
 * CH4 captures the counter at each rising edge into DMA1 channel 4.

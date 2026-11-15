@@ -98,27 +98,52 @@ static uint32_t first_byte;
 static int      pending_speed = -1;
 static uint8_t  pending_cmd;
 
-static void i2c_apply_speed(int fast)
+/* Program the slave clocking from the APB1 frequency that is actually running.
+ * speed is the SCL prescaler: APB1 / (2 * SCL) in standard mode and
+ * APB1 / (3 * SCL) for fast mode with a 1:2 high:low ratio, which is what the
+ * reference manual and the vendor BSP use. */
+static void i2c_apply_speed(uint32_t scl_hz)
 {
-    I2C2->ctrl1_bit.i2cen = 0;
+    uint32_t apb1 = clock_apb1_hz();
+    uint32_t mhz = apb1 / 1000000u;
+    uint32_t speed;
+    uint32_t rise;
 
-    if (fast) {
-        I2C2->clkctrl_bit.speed = 150;
-        I2C2->clkctrl_bit.speedmode = 1;
-        I2C2->clkctrl_bit.dutymode = 0;
-        I2C2->tmrise_bit.risetime = 37;
-        g_i2c_speed = 1;
-    } else {
-        I2C2->clkctrl_bit.speed = 600;
+    I2C2->ctrl1_bit.i2cen = 0;
+    I2C2->ctrl2_bit.clkfreq = mhz;
+
+    if (scl_hz <= 100000u) {
+        speed = apb1 / (2u * scl_hz);
+        if (speed < 4u) {
+            speed = 4u;
+        }
         I2C2->clkctrl_bit.speedmode = 0;
-        I2C2->clkctrl_bit.dutymode = 0;
-        I2C2->tmrise_bit.risetime = 63;
-        g_i2c_speed = 0;
+        rise = mhz + 1u;
+    } else {
+        speed = apb1 / (3u * scl_hz);
+        if (speed == 0u) {
+            speed = 1u;
+        }
+        I2C2->clkctrl_bit.speedmode = 1;
+        rise = (mhz * 300u) / 1000u + 1u;
     }
+
+    if (speed > 0xFFFu) {
+        speed = 0xFFFu;
+    }
+    if (rise > 0x3Fu) {
+        rise = 0x3Fu;
+    }
+
+    I2C2->clkctrl_bit.dutymode = 0;             /* 1:2 high:low in fast mode */
+    I2C2->clkctrl_bit.speed = speed;
+    I2C2->tmrise_bit.risetime = rise;
 
     I2C2->ctrl1_bit.i2cen = 1;
     I2C2->ctrl1_bit.acken = 1;
     I2C2->ctrl1_bit.stretch = 1;
+
+    g_i2c_speed = (scl_hz > 100000u) ? 1u : 0u;
 }
 
 static void i2c_hw_init(void)
@@ -133,11 +158,10 @@ static void i2c_hw_init(void)
 
     I2C2->ctrl1 = 0;
     I2C2->ctrl2 = 0;
-    I2C2->ctrl2_bit.clkfreq = 120;
     I2C2->oaddr1 = I2C_OADDR1;
     I2C2->oaddr1_bit.addr1mode = 0;
 
-    i2c_apply_speed(0);
+    i2c_apply_speed(100000u);
 }
 
 static void i2c_poll(void)
@@ -204,7 +228,7 @@ static void i2c_poll(void)
             pending_cmd = 0;
         }
         if (pending_speed >= 0) {
-            i2c_apply_speed(pending_speed);
+            i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
             pending_speed = -1;
         }
         return;

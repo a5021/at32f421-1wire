@@ -1,5 +1,6 @@
 #include "ow_hal.h"
 #include "at32f421.h"
+#include "clock.h"
 
 #define OW_PIN                  10u
 #define OW_PIN_MASK             (1u << OW_PIN)
@@ -47,9 +48,15 @@ void ow_hal_init(void)
     CRM->ahben_bit.dma1en = 1;
     CRM->apb2en_bit.tmr1en = 1;
 
-    /* Timer: 1 us tick, no ARR preload, overflow events enabled (OVFEN=0). */
-    TMR1->ctrl1 = 0u;
-    TMR1->div = 119u;
+    /* Timer: 1 us tick, no ARR preload, overflow events enabled (OVFEN=0).
+     * TMR1 is on APB2, whose prescaler is /1, so DIV comes straight from the
+     * APB2 frequency (120 MHz -> DIV 119). */
+    {
+        uint32_t mhz = clock_apb2_hz() / 1000000u;
+
+        TMR1->ctrl1 = 0u;
+        TMR1->div = (mhz != 0u) ? (mhz - 1u) : 0u;
+    }
     TMR1->pr = 0u;
     TMR1->rpr = 0u;
     TMR1->c3dt = 0u;
