@@ -244,12 +244,22 @@ ow_status_t ds18b20_temp_poll(ds18b20_t *d, int16_t *raw)
     }
 
     if (d->stage == 0u) {
-        ow_status_t st = ds18b20_convert_poll(d);
-        if (st == OW_BUSY) {
-            return OW_BUSY;
+        /* A convert that failed (or that was never started) leaves the phase
+         * at DS_PH_DONE.  Reading here would hand out the previous
+         * scratchpad as if it were fresh, so require a new temp_start. */
+        if (d->phase == DS_PH_DONE) {
+            return OW_PARAM;
         }
-        if (st != OW_OK) {
-            return st;
+        {
+            ow_status_t st = ds18b20_convert_poll(d);
+
+            if (st == OW_BUSY) {
+                return OW_BUSY;
+            }
+            if (st != OW_OK) {
+                d->stage = 0u;
+                return st;
+            }
         }
         d->stage = 1u;
         d->phase = DS_PH_RESET_ARM;

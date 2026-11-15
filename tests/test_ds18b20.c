@@ -196,6 +196,36 @@ void test_ds18b20_run(void)
     }
     TF_CHECK_EQ(OW_OK, spin_temp(&d, 0));
 
+    /* A failed convert must not turn into a read of the stale scratchpad. */
+    mock_reset();
+    ds18b20_init(&d, true);
+    ds18b20_temp_start(&d, 0);
+    {
+        int16_t raw = 0x1234;
+
+        TF_CHECK_EQ(OW_NO_PRESENCE, spin_temp(&d, &raw));
+        TF_CHECK_EQ(0x1234, raw);                 /* untouched on failure */
+    }
+
+    /* The device comes back, but no conversion has run: polling must not
+     * report the sensor's previous value as a fresh reading. */
+    (void)mock_add(MOCK_DS18B20, rom);
+    {
+        int16_t raw = 0x1234;
+
+        TF_CHECK_EQ(OW_PARAM, ds18b20_temp_poll(&d, &raw));
+        TF_CHECK_EQ(0x1234, raw);
+    }
+
+    /* A new start recovers and reports a real reading. */
+    ds18b20_temp_start(&d, 0);
+    {
+        int16_t raw = 0;
+
+        TF_CHECK_EQ(OW_OK, spin_temp(&d, &raw));
+        TF_CHECK_EQ(0x0550, raw);
+    }
+
     /* NULL handling. */
     TF_CHECK_EQ(OW_PARAM, ds18b20_convert_poll(0));
     TF_CHECK_EQ(OW_PARAM, ds18b20_read_poll(0));

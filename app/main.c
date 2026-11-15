@@ -47,6 +47,7 @@
 #define STS2_DIRF               0x00000004u
 
 #define DEV_MAX                 16u
+_Static_assert(REG_ROMS + 8u * DEV_MAX <= 256u, "ROM map overflows the register file");
 
 enum {
     MGR_SEARCH = 0,
@@ -67,6 +68,12 @@ static uint32_t ds18b20_count;
 
 static int16_t  temp_raw[DEV_MAX];
 static uint8_t  temp_status[DEV_MAX];
+
+/* Number of ROMs actually stored in roms[] (the search counts more). */
+static uint32_t rom_count(void)
+{
+    return (device_count < DEV_MAX) ? device_count : DEV_MAX;
+}
 static uint8_t  sp_sel[9];
 static uint8_t  eeprom_data[8];
 static uint8_t  eeprom_status;
@@ -247,6 +254,15 @@ static void i2c_poll(void)
     if ((sts1 & STS1_OUF) != 0u) {
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
     }
+    /* An aborted transfer must not leave a command or a speed change armed
+     * for the next STOP, which belongs to somebody else's transaction. */
+    if ((sts1 & (STS1_ACKFAIL | STS1_BUSERR | STS1_ARLOST | STS1_OUF)) != 0u) {
+        pending_cmd = 0;
+        pending_speed = -1;
+        rx_mode = 0;
+        tx_mode = 0;
+        first_byte = 0;
+    }
 }
 
 static void clear_results(void)
@@ -292,6 +308,13 @@ static void publish(void)
         g_regs[REG_TEMP + 2u * i + 1u] = (uint8_t)((uint16_t)temp_raw[i] >> 8);
         g_regs[REG_TEMP_STATUS + i] = temp_status[i];
     }
+    /* Slots this cycle did not fill must not keep the previous cycle's
+     * readings: a rescan can leave fewer sensors than before. */
+    for (uint32_t i = ds18b20_count; i < DEV_MAX; i++) {
+        g_regs[REG_TEMP + 2u * i] = 0x00u;
+        g_regs[REG_TEMP + 2u * i + 1u] = 0x80u;      /* 0x8000 = invalid */
+        g_regs[REG_TEMP_STATUS + i] = 0xFFu;
+    }
 
     memcpy((void *)&g_regs[REG_EEPROM], eeprom_data, 8u);
     g_regs[REG_EEPROM_STATUS] = eeprom_status;
@@ -301,6 +324,9 @@ static void publish(void)
     if (roms_dirty != 0u) {
         for (uint32_t i = 0u; (i < device_count) && (i < DEV_MAX); i++) {
             memcpy((void *)&g_regs[REG_ROMS + 8u * i], roms[i], 8u);
+        }
+        for (uint32_t i = device_count; i < DEV_MAX; i++) {
+            memset((void *)&g_regs[REG_ROMS + 8u * i], 0xFF, 8u);
         }
         roms_dirty = 0u;
     }
@@ -410,10 +436,12 @@ static void manager_poll(void)
         break;
 
     case MGR_READ:
-        while ((read_dev < device_count) && (roms[read_dev][0] != 0x28u)) {
+        /* device_count counts every device the search found, while roms[]
+         * stores at most DEV_MAX of them: walk only the stored range. */
+        while ((read_dev < rom_count()) && (roms[read_dev][0] != 0x28u)) {
             read_dev++;
         }
-        if ((read_dev >= device_count) || (read_sensor >= DEV_MAX)) {
+        if ((read_dev >= rom_count()) || (read_sensor >= DEV_MAX)) {
             manager_state = MGR_EEPROM;
             return;
         }

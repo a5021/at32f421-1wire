@@ -95,6 +95,10 @@ Register map, read linearly from `0x00`:
 0x80..0xFF ROM table (16 x 8 bytes)
 ```
 
+The bridge tracks the first 16 devices a search finds (`REG_DEVICES` still
+reports the total); unused temperature slots read 0x8000/0xFF and unused ROM
+slots read all 0xFF.
+
 Run the demo:
 
 ```sh
