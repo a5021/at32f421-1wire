@@ -8,6 +8,8 @@
   is released HIGH by hardware (`ow_hal_done()` no longer stops the timer or
   disables channels). Previously a pass only stopped when `ow_hal_done()`
   ran, so a delayed manager left the bus pulled low.
+- **Engine:** `ow_hal_strong_pullup(false)` now disables C3EN and stops the
+  timer so the line is fully released after parasite power.
 - **Clock:** `clock_config()` PLL multiplier field now follows the vendor
   encoding (multiplier−2 up to ×15, multiplier−1 from ×16); the HICK/2
   fallback previously silently produced ×29 (116 MHz) instead of ×30
@@ -24,14 +26,23 @@
   fire on another transaction's STOP.
 - **DS18B20:** `ds18b20_temp_poll()` returns `OW_PARAM` when no conversion
   has run instead of reporting the previous scratchpad as fresh.
+- **Manager:** `manager_poll()` moved from `app/main.c` to `src/manager.c`
+  and is now covered by host tests (`tests/test_manager.c`).
+- **Manager:** aborted I2C commands (`manager_command()`) are consumed
+  exactly once; a command latched while busy is ignored on subsequent polls.
 
 ### Changed
 - Register map moved to `docs/register-map.md` (source of truth); README
   keeps a short summary. `tools/onewire_demo.py` constants carry a sync note.
 - Clock tree queried at runtime via `clock_ahb_hz()` /
   `clock_apb1_hz()` / `clock_apb2_hz()` instead of hardcoded 120 MHz.
+- New docs: `docs/register-map.md`, `docs/i2c-protocol.md`,
+  `CONTRIBUTING.md`, `HARDWARE-NOTES.md`.
 
-## 1c431b6 — Optimize hot paths
+### Added
+- Host test `tests/test_manager.c` for the manager command path
+  (332 checks total, 0 failures).
+
 
 I2C idle early-out, publish copies, LTO, host block read. 5.7 KB text /
 2.7 KB BSS (Make), 4.3 KB text / 2.1 KB BSS (CMake). 320 host checks, 0

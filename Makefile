@@ -24,6 +24,7 @@ LDFLAGS  := $(MCU) -flto -T$(LDSCRIPT) \
 SRCS := \
 	src/ow_crc.c \
 	src/ow_hal.c \
+	src/manager.c \
 	src/onewire.c \
 	src/ds18b20.c \
 	src/ds2431.c \
@@ -55,7 +56,9 @@ HOST_SRCS := \
 	src/ow_crc.c \
 	src/onewire.c \
 	src/ds18b20.c \
-	src/ds2431.c
+	src/ds2431.c \
+	src/manager.c \
+	tests/test_manager.c
 HOST_CFLAGS := -std=c11 -O1 -g -Wall -Wextra -Wshadow -Wno-unused-parameter \
                -Isrc -Itests -Itests/mock
 

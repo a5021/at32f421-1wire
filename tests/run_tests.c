@@ -12,5 +12,6 @@ int main(void)
     TF_RUN(test_ds2431_run);
     TF_RUN(test_state_run);
     TF_RUN(test_headers_run);
+    TF_RUN(test_manager_run);
     return tf_summary();
 }

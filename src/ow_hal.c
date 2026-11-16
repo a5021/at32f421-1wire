@@ -259,5 +259,7 @@ void ow_hal_strong_pullup(bool on)
         GPIOA->omode &= ~OW_PIN_MASK;           /* push-pull */
     } else {
         GPIOA->omode |= OW_PIN_MASK;            /* open-drain */
+        TMR1->cctrl &= ~(1u << 8);              /* C3EN off */
+        TMR1->ctrl1_bit.tmren = 0u;             /* stop the timer */
     }
 }

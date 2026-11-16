@@ -1,0 +1,76 @@
+#ifndef MANAGER_H
+#define MANAGER_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * Register-map constants shared with the I2C bridge in app/main.c.
+ */
+#define REG_MAGIC               0x00u
+#define REG_VERSION             0x01u
+#define REG_FLAGS               0x02u
+#define REG_DEVICES             0x03u
+#define REG_DS18B20             0x04u
+#define REG_ERROR               0x05u
+#define REG_CYCLE_L             0x06u
+#define REG_CYCLE_H             0x07u
+#define REG_SPEED               0x0Fu
+#define REG_TEMP                0x10u
+#define REG_TEMP_STATUS         0x30u
+#define REG_EEPROM              0x40u
+#define REG_EEPROM_STATUS       0x48u
+#define REG_CMD                 0x60u
+#define REG_SELECTED            0x61u
+#define REG_SCRATCH             0x70u
+#define REG_ROMS                0x80u
+
+#define FLAG_SEARCH_DONE        0x01u
+#define FLAG_SEARCH_ERROR       0x02u
+#define FLAG_BUSY               0x04u
+#define FLAG_SNAPSHOT           0x08u
+#define FLAG_EEPROM_OK          0x10u
+#define FLAG_TEMP_ERROR         0x20u
+
+#define DEV_MAX                 16u
+_Static_assert(REG_ROMS + 8u * DEV_MAX <= 256u, "ROM map overflows the register file");
+
+enum {
+    MGR_SEARCH = 0,
+    MGR_CONVERT,
+    MGR_READ,
+    MGR_EEPROM,
+    MGR_PUBLISH,
+    MGR_WAIT
+};
+
+/* Shared register file, defined here but also visible to the I2C bridge
+ * in app/main.c through this declaration. */
+extern uint8_t g_regs[256];
+
+/* Initial state for a cold start. */
+void manager_init(void);
+
+/* Advance the 1-Wire manager state machine.  Call from the superloop
+ * together with i2c_poll(). */
+void manager_poll(void);
+
+/* Called by the I2C bridge when a command is latched at STOP. */
+void manager_command(uint8_t cmd);
+
+/* True while the I2C bridge is mid-transaction; overrides the weak stub
+ * in manager.c on the real target. */
+bool manager_i2c_busy(void);
+
+/* Test helper: force the manager state (tests only). */
+void manager_set_state_for_test(uint32_t state);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MANAGER_H */
