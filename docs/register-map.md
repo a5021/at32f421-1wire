@@ -1,0 +1,59 @@
+# AT32F421F8P7 1-Wire bridge — register map
+
+Canonical description of the I2C slave register file exposed by
+`app/main.c` (`g_regs[256]`). Addresses are byte offsets within the
+`0x42` slave (7-bit address `0x42`, transmitted as `0x84` write /
+`0x85` read).
+
+## Layout
+
+| Address | Size | Name | Meaning |
+|---------|------|------|---------|
+| `0x00` | 1 | `REG_MAGIC` | `0x5A` — sanity byte the master should check first |
+| `0x01` | 1 | `REG_VERSION` | Firmware version, `0x01` |
+| `0x02` | 1 | `REG_FLAGS` | Status flags (see below) |
+| `0x03` | 1 | `REG_DEVICES` | Total devices found by search (may exceed 16) |
+| `0x04` | 1 | `REG_DS18B20` | DS18B20 count (may exceed 16) |
+| `0x05` | 1 | `REG_ERROR` | Last error code |
+| `0x06` | 2 | `REG_CYCLE` | Cycle counter, little-endian |
+| `0x0F` | 1 | `REG_SPEED` | `0` = 100 kHz, `1` = 400 kHz (writable) |
+| `0x10..0x2F` | 32 | `REG_TEMP` | 16 × `int16` raw temperature (1/16 °C), `0x8000` = invalid |
+| `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
+| `0x40..0x47` | 8 | `REG_EEPROM` | Last DS2431 read block |
+| `0x48` | 1 | `REG_EEPROM_STATUS` | DS2431 status (`0x00` = OK, `0xFF` = invalid) |
+| `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters |
+| `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed |
+| `0x70..0x78` | 9 | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
+| `0x80..0xFF` | 128 | `REG_ROMS` | 16 × 8-byte ROM table |
+
+## Flags (`REG_FLAGS`)
+
+| Bit | Mask | Name | Meaning |
+|-----|------|------|---------|
+| 0 | `0x01` | `FLAG_SEARCH_DONE` | A search has completed |
+| 1 | `0x02` | `FLAG_SEARCH_ERROR` | Search ended with an error |
+| 2 | `0x04` | `FLAG_BUSY` | Manager is busy (search/convert/read/EEPROM) |
+| 3 | `0x08` | `FLAG_SNAPSHOT` | Register snapshot is valid |
+| 4 | `0x10` | `FLAG_EEPROM_OK` | DS2431 read succeeded |
+| 5 | `0x20` | `FLAG_TEMP_ERROR` | At least one temperature error this cycle |
+
+## Invalid-slot markers
+
+The bridge tracks the first 16 devices a search finds; `REG_DEVICES`
+still reports the total.
+
+| Slot | Temperature (`0x10 + 2i`) | Status (`0x30 + i`) | ROM (`0x80 + 8i`) |
+|------|---------------------------|---------------------|-------------------|
+| unused | `0x8000` (invalid) | `0xFF` | all `0xFF` |
+
+## Writable registers
+
+Only `REG_SPEED` (`0x0F`) and `REG_CMD` (`0x60`) accept writes. A write
+is latched at STOP and applied when the current transaction finishes; an
+aborted transfer (ACKFAIL/BUSERR/ARLOST/OUF) discards the pending value.
+
+## Source of truth
+
+Register constants live in `app/main.c` (`REG_*` defines) and are
+duplicated in `tools/onewire_demo.py` for the demo client. Keep all three
+in sync when the map changes.

@@ -74,30 +74,30 @@ The board exposes the sensor snapshot as an I2C slave at address `0x42`.
 I2C2 is polled (no interrupts, clock stretching enabled); the 1-Wire manager
 runs in the same superloop and never blocks.
 
-Register map, read linearly from `0x00`:
+Full register map: `docs/register-map.md` (addresses, flags, writable
+registers, invalid-slot markers). Short summary:
 
-```
-0x00 magic 0x5A
-0x01 version
-0x02 flags: search done/error, busy, snapshot valid, eeprom ok, temp error
-0x03 device count
-0x04 DS18B20 count
-0x05 last error
-0x06 cycle counter, little endian
-0x0F speed: 0 = 100 kHz, 1 = 400 kHz
-0x10..0x2F 16 x int16 raw temperature (1/16 C, 0x8000 invalid)
-0x30..0x3F 16 x sensor status
-0x40..0x47 DS2431 bytes
-0x48 DS2431 status
-0x60 command: 1 = rescan, 2 = reread DS2431, 3 = clear counters
-0x61 selected sensor for scratchpad
-0x70..0x78 selected DS18B20 scratchpad
-0x80..0xFF ROM table (16 x 8 bytes)
-```
+| Address | Name | Meaning |
+|---------|------|---------|
+| `0x00` | `REG_MAGIC` | `0x5A` sanity byte |
+| `0x01` | `REG_VERSION` | Firmware version |
+| `0x02` | `REG_FLAGS` | Search/busy/snapshot/error flags |
+| `0x03` | `REG_DEVICES` | Total devices found (may exceed 16) |
+| `0x04` | `REG_DS18B20` | DS18B20 count (may exceed 16) |
+| `0x05` | `REG_ERROR` | Last error code |
+| `0x06` | `REG_CYCLE` | Cycle counter, little-endian |
+| `0x0F` | `REG_SPEED` | `0` = 100 kHz, `1` = 400 kHz (writable) |
+| `0x10..0x2F` | `REG_TEMP` | 16 × `int16` raw temp (1/16 °C), `0x8000` invalid |
+| `0x30..0x3F` | `REG_TEMP_STATUS` | Per-sensor status, `0xFF` invalid |
+| `0x40..0x47` | `REG_EEPROM` | Last DS2431 read block |
+| `0x48` | `REG_EEPROM_STATUS` | DS2431 status (`0x00` OK, `0xFF` invalid) |
+| `0x60` | `REG_CMD` | Command: `1` rescan, `2` reread DS2431, `3` clear counters |
+| `0x61` | `REG_SELECTED` | Sensor whose scratchpad is exposed (low nibble) |
+| `0x70..0x78` | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
+| `0x80..0xFF` | `REG_ROMS` | 16 × 8-byte ROM table |
 
-The bridge tracks the first 16 devices a search finds (`REG_DEVICES` still
-reports the total); unused temperature slots read 0x8000/0xFF and unused ROM
-slots read all 0xFF.
+The bridge tracks the first 16 devices a search finds; unused temperature
+slots read `0x8000`/`0xFF` and unused ROM slots read all `0xFF`.
 
 Run the demo:
 
