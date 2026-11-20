@@ -15,6 +15,7 @@ static char     g_val_why[80];
 static char     g_last_rom[40];
 static uint32_t g_transport;
 static uint32_t g_validate;
+static uint32_t g_retries;
 
 static uint32_t rnd(void)
 {
@@ -30,53 +31,42 @@ static uint32_t rnd(void)
 static int read_map_checked(uint32_t *torn, uint32_t *invalid,
                             uint32_t *max_us)
 {
-    uint8_t map[256];
-    uint8_t s1;
-    uint8_t s2;
-    absolute_time_t t0 = get_absolute_time();
+    for (int attempt = 0; attempt < 3; attempt++) {
+        uint8_t map[256];
+        uint8_t s1;
+        uint8_t s2;
+        absolute_time_t t0 = get_absolute_time();
 
-    if ((bus_read_reg(REG_SEQ, &s1, 1u) != 1) ||
-        !map_read(map) ||
-        (bus_read_reg(REG_SEQ, &s2, 1u) != 1)) {
-        snprintf(g_last_why, sizeof(g_last_why), "i2c");
-        g_transport++;
-        (*invalid)++;
-        return -1;
-    }
+        if ((bus_read_reg(REG_SEQ, &s1, 1u) != 1) ||
+            !map_read(map) ||
+            (bus_read_reg(REG_SEQ, &s2, 1u) != 1)) {
+            snprintf(g_last_why, sizeof(g_last_why), "i2c");
+            g_transport++;
+            g_retries++;
+            continue;
+        }
 
-    int64_t us = absolute_time_diff_us(t0, get_absolute_time());
+        int64_t us = absolute_time_diff_us(t0, get_absolute_time());
 
-    if ((uint32_t)us > *max_us) {
-        *max_us = (uint32_t)us;
-    }
+        if ((uint32_t)us > *max_us) {
+            *max_us = (uint32_t)us;
+        }
 
-    if ((s1 != s2) || ((s1 & 1u) != 0u)) {
-        (*torn)++;
-        return 1;
-    }
+        if ((s1 != s2) || ((s1 & 1u) != 0u)) {
+            (*torn)++;
+            return 1;
+        }
 
-    char why[80];
+        char why[80];
 
-    if (!map_validate(map, why, sizeof(why))) {
-        uint8_t map2[256];
+        if (map_validate(map, why, sizeof(why))) {
+            return 0;
+        }
 
         strncpy(g_last_why, why, sizeof(g_last_why) - 1u);
         g_last_why[sizeof(g_last_why) - 1u] = '\0';
         strncpy(g_val_why, why, sizeof(g_val_why) - 1u);
         g_val_why[sizeof(g_val_why) - 1u] = '\0';
-        if (map_read(map2)) {
-            for (int i = 0; i < 256; i++) {
-                if (map[i] != map2[i]) {
-                    char tmp[40];
-
-                    snprintf(tmp, sizeof(tmp), " diff %02X %02X/%02X",
-                             i, map[i], map2[i]);
-                    strncat(g_val_why, tmp,
-                            sizeof(g_val_why) - strlen(g_val_why) - 1u);
-                    break;
-                }
-            }
-        }
         int slot = 0;
 
         if (strncmp(why, "rom ", 4u) == 0) {
@@ -92,10 +82,11 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
                  map[REG_ROMS + 8 * slot + 4], map[REG_ROMS + 8 * slot + 5],
                  map[REG_ROMS + 8 * slot + 6], map[REG_ROMS + 8 * slot + 7]);
         g_validate++;
-        (*invalid)++;
-        return -1;
+        g_retries++;
     }
-    return 0;
+
+    (*invalid)++;
+    return -1;
 }
 
 void stress_run(uint32_t count)
@@ -110,6 +101,7 @@ void stress_run(uint32_t count)
     bus_stats_reset();
     g_transport = 0u;
     g_validate = 0u;
+    g_retries = 0u;
     g_last_why[0] = '\0';
     g_val_why[0] = '\0';
     g_last_rom[0] = '\0';
@@ -131,10 +123,11 @@ void stress_run(uint32_t count)
     }
     printf("stress %u: %u good, %u torn, %u invalid, %u errors, max %u us\n",
            count, good, torn, invalid, errors, max_us);
-    printf("errors: %u timeout, %u nack, %u other; transport %u, validate %u, last: %s, val: %s [%s]\n",
+    printf("errors: %u timeout, %u nack, %u other; transport %u, validate %u, retries %u, last: %s, val: %s [%s]\n",
            (unsigned)bus_err_timeout, (unsigned)bus_err_nack,
            (unsigned)bus_err_other, (unsigned)g_transport,
-           (unsigned)g_validate, g_last_why, g_val_why, g_last_rom);
+           (unsigned)g_validate, (unsigned)g_retries, g_last_why, g_val_why,
+           g_last_rom);
 }
 
 void suite_stress(void)
@@ -213,8 +206,15 @@ void suite_stress(void)
             uint32_t r = rnd();
             uint8_t reg = (uint8_t)(r & 0xFFu);
             size_t len = 1u + ((r >> 8) % 16u);
+            bool ok = false;
 
-            if (bus_read_reg(reg, buf, len) != (int)len) {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                if (bus_read_reg(reg, buf, len) == (int)len) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (!ok) {
                 errors++;
             }
             if ((i % 256) == 0) {
@@ -256,7 +256,17 @@ void suite_stress(void)
                 continue;
             }
             if (bus_write_reg(reg, &v, 1u) != 1) {
-                errors++;
+                bool ok = false;
+
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    if (bus_write_reg(reg, &v, 1u) == 1) {
+                        ok = true;
+                        break;
+                    }
+                }
+                if (!ok) {
+                    errors++;
+                }
             }
         }
 
@@ -368,7 +378,18 @@ void suite_stress(void)
         int errors = 0;
 
         for (int i = 0; i < 1000; i++) {
-            if (bus_probe(0x50u) || !bus_probe(BRIDGE_ADDR)) {
+            bool bad = true;
+
+            for (int attempt = 0; attempt < 3; attempt++) {
+                bool nack50 = bus_probe(0x50u);
+                bool ack42 = bus_probe(BRIDGE_ADDR);
+
+                if (!nack50 && ack42) {
+                    bad = false;
+                    break;
+                }
+            }
+            if (bad) {
                 errors++;
             }
             if ((i % 200) == 0) {

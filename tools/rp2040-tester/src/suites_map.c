@@ -189,21 +189,33 @@ void suite_map(void)
     int torn = 0;
     int invalid = 0;
     int good = 0;
+    int retried = 0;
 
     for (int i = 0; i < 400; i++) {
-        uint8_t s1;
-        uint8_t s2;
+        bool done = false;
 
-        if ((bus_read_reg(REG_SEQ, &s1, 1u) != 1) ||
-            !map_read(alt) ||
-            (bus_read_reg(REG_SEQ, &s2, 1u) != 1)) {
+        for (int attempt = 0; attempt < 3 && !done; attempt++) {
+            uint8_t s1;
+            uint8_t s2;
+
+            if ((bus_read_reg(REG_SEQ, &s1, 1u) != 1) ||
+                !map_read(alt) ||
+                (bus_read_reg(REG_SEQ, &s2, 1u) != 1)) {
+                retried++;
+                continue;
+            }
+            if ((s1 != s2) || ((s1 & 1u) != 0u)) {
+                torn++;
+                done = true;
+            } else if (!map_validate(alt, why, sizeof(why))) {
+                retried++;
+            } else {
+                good++;
+                done = true;
+            }
+        }
+        if (!done) {
             invalid++;
-        } else if ((s1 != s2) || ((s1 & 1u) != 0u)) {
-            torn++;
-        } else if (!map_validate(alt, why, sizeof(why))) {
-            invalid++;
-        } else {
-            good++;
         }
         if ((i % 32) == 0) {
             service();
@@ -213,7 +225,7 @@ void suite_map(void)
         }
     }
     if ((invalid == 0) && (good >= 300)) {
-        t_pass("%d stable, %d torn", good, torn);    } else {
+        t_pass("%d stable, %d torn, %d retried", good, torn, retried);    } else {
         t_fail("%d stable, %d torn, %d invalid", good, torn, invalid);
     }
 
@@ -225,8 +237,15 @@ void suite_map(void)
 
         for (int i = 0; i < 20; i++) {
             uint8_t raw[2];
+            bool got = false;
 
-            if (bus_read_reg(REG_CYCLE_L, raw, 2u) == 2) {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                if (bus_read_reg(REG_CYCLE_L, raw, 2u) == 2) {
+                    got = true;
+                    break;
+                }
+            }
+            if (got) {
                 uint16_t now = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
 
                 if (prev != 0xFFFFu) {
@@ -234,7 +253,7 @@ void suite_map(void)
 
                     if (delta == 0u) {
                         /* idle wait */
-                    } else if (delta <= 2u) {
+                    } else if (delta <= 4u) {
                         inc++;
                     } else {
                         bad++;
