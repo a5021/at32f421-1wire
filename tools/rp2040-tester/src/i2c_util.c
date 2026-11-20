@@ -59,12 +59,33 @@ uint32_t bus_speed(void)
 void bus_recover(void)
 {
     /* Nine clocks plus a STOP release a slave that is holding SDA low after
-     * an aborted transfer.  Then the hardware I2C block is reinitialised. */
+     * an aborted transfer.  Never drive SCL high while a slave is stretching
+     * it low: that is a short, not a recovery. */
     gpio_set_function(PIN_SDA, GPIO_FUNC_SIO);
     gpio_set_function(PIN_SCL, GPIO_FUNC_SIO);
     gpio_pull_up(PIN_SDA);
     gpio_pull_up(PIN_SCL);
     gpio_set_dir(PIN_SDA, GPIO_IN);
+    gpio_set_dir(PIN_SCL, GPIO_IN);
+
+    bool high = false;
+
+    for (int i = 0; i < 1000; i++) {
+        if (gpio_get(PIN_SCL)) {
+            high = true;
+            break;
+        }
+        busy_wait_us_32(1);
+    }
+    if (!high) {
+        /* The slave still owns SCL; leave the pins alone and just reset the
+         * master block. */
+        i2c_init(I2C_INST, current_speed);
+        gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
+        gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
+        return;
+    }
+
     gpio_set_dir(PIN_SCL, GPIO_OUT);
     gpio_put(PIN_SCL, 1);
     busy_wait_us_32(5);
@@ -116,9 +137,9 @@ static bool tx_reg(uint8_t reg, const uint8_t *data, size_t len, bool nostop)
                                    nostop, BUS_TIMEOUT_US);
     if (ret != (int)(len + 1u)) {
         count_err(ret);
-    }
-    if (ret == PICO_ERROR_TIMEOUT) {
-        bus_recover();
+        if (ret == PICO_ERROR_TIMEOUT) {
+            bus_recover();
+        }
     }
     return ret == (int)(len + 1u);
 }
@@ -176,9 +197,9 @@ int bus_read_only(uint8_t *buf, size_t len)
 
     if (got != (int)len) {
         count_err(got);
-    }
-    if (got == PICO_ERROR_TIMEOUT) {
-        bus_recover();
+        if (got == PICO_ERROR_TIMEOUT) {
+            bus_recover();
+        }
     }
     return (got == (int)len) ? got : -1;
 }
