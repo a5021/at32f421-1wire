@@ -1,0 +1,6 @@
+.program scl_sampler
+; Sample SCL once per SM clock into the input shift register.
+; Autopush packs 32 samples per word for DMA.
+.wrap_target
+    in pins, 1
+.wrap

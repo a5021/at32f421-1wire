@@ -1,0 +1,42 @@
+#ifndef TESTER_I2C_UTIL_H
+#define TESTER_I2C_UTIL_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "regmap.h"
+
+#define BUS_TIMEOUT_US      100000u
+#define BUS_PROBE_US        5000u
+#define BUS_SPEED_100K      100000u
+#define BUS_SPEED_400K      400000u
+
+void     bus_init(void);
+void     bus_set_speed(uint32_t hz);
+uint32_t bus_speed(void);
+bool     bus_probe(uint8_t addr);
+
+int      bus_write_reg(uint8_t reg, const uint8_t *data, size_t len);
+int      bus_write_reg_nostop(uint8_t reg, const uint8_t *data, size_t len);
+int      bus_read_reg(uint8_t reg, uint8_t *buf, size_t len);
+int      bus_read_reg_nostop(uint8_t reg, uint8_t *buf, size_t len);
+int      bus_read_only(uint8_t *buf, size_t len);
+
+uint16_t map_cycle(const uint8_t *map);
+bool     map_read(uint8_t *map);
+bool     map_stable(uint8_t *map, uint32_t timeout_ms);
+bool     map_wait_cycle(uint16_t old_cycle, uint8_t *map, uint32_t timeout_ms);
+bool     map_wait_not_busy(uint32_t timeout_ms);
+bool     map_wait_busy(uint32_t timeout_ms);
+bool     map_wait_snapshot(uint8_t *map, uint32_t timeout_ms);
+
+bool     write_speed(uint8_t value);
+bool     send_cmd(uint8_t cmd);
+bool     select_sensor(uint8_t index);
+bool     read_scratch(uint8_t *dst9);
+
+/* Release a bus left in the middle of a repeated-start sequence. */
+void     bus_recover(void);
+
+#endif /* TESTER_I2C_UTIL_H */

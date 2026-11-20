@@ -139,11 +139,19 @@ static void i2c_poll(void)
             reg_ptr = b;
             first_byte = 0;
         } else {
-            g_regs[reg_ptr] = b;
-            if (reg_ptr == REG_SPEED && b <= 1u) {
-                pending_speed = (int)b;
+            /* Only REG_SPEED and REG_CMD are writable.  Everything else is a
+             * read-only snapshot; the pointer still advances so a block write
+             * cannot be used to poke the register file. */
+            if (reg_ptr == REG_SPEED) {
+                if (b <= 1u) {
+                    g_regs[REG_SPEED] = b;
+                    pending_speed = (int)b;
+                }
             } else if (reg_ptr == REG_CMD) {
+                g_regs[REG_CMD] = b;
                 pending_cmd = b;
+            } else if (reg_ptr == REG_SELECTED) {
+                g_regs[REG_SELECTED] = b & 0x0Fu;
             }
             reg_ptr = (reg_ptr + 1u) & 0xFFu;
         }

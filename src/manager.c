@@ -142,6 +142,12 @@ static void publish(void)
     memcpy((void *)&g_regs[REG_EEPROM], eeprom_data, 8u);
     g_regs[REG_EEPROM_STATUS] = eeprom_status;
 
+    /* A selection outside the DS18B20 table must not expose a stale
+     * scratchpad: publish the invalid marker instead. */
+    if ((g_regs[REG_SELECTED] & 0x0Fu) >= ds18b20_count) {
+        memset(sp_sel, 0xFF, sizeof(sp_sel));
+    }
+
     memcpy((void *)&g_regs[REG_SCRATCH], sp_sel, 9u);
 
     if (roms_dirty != 0u) {

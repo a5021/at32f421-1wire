@@ -15,10 +15,12 @@ The master sends `[reg_addr, data_byte, ...]`. The first byte after the
 address+W is the register pointer; subsequent bytes are written to consecutive
 registers (pointer auto-increments, wraps at 0xFF).
 
-Only `REG_SPEED` (`0x0F`) and `REG_CMD` (`0x60`) are writable. The value is
-**latched at STOP** and applied when the current transaction finishes — it is
-**not** applied immediately on the byte write. An aborted transfer
-(ACKFAIL/BUSERR/ARLOST/OUF) discards any latched command or speed change.
+Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`) and `REG_SELECTED` (`0x61`) are
+writable; writes to any other address are ignored and the pointer still
+advances. The value is **latched at STOP** and applied when the current
+transaction finishes — it is **not** applied immediately on the byte write. An
+aborted transfer (ACKFAIL/BUSERR/ARLOST/OUF) discards any latched command or
+speed change.
 
 ### Read (master → bridge)
 
@@ -34,8 +36,8 @@ returns the register value at the pointer, auto-incrementing on each byte.
 | `2`   | Re-read the DS2431 EEPROM block |
 | `3`   | Clear cycle/error counters |
 
-A command is accepted only when the manager is idle (`MGR_WAIT`) and the
-inter-cycle delay has elapsed. Otherwise it is silently dropped.
+A command is queued if the manager is busy and runs when the current cycle
+reaches its idle state; a later command overwrites a still-pending one.
 
 ### Speed (`REG_SPEED`)
 

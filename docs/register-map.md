@@ -21,8 +21,8 @@ Canonical description of the I2C slave register file exposed by
 | `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
 | `0x40..0x47` | 8 | `REG_EEPROM` | Last DS2431 read block |
 | `0x48` | 1 | `REG_EEPROM_STATUS` | DS2431 status (`0x00` = OK, `0xFF` = invalid) |
-| `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters |
-| `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed |
+| `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters (writable) |
+| `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed (writable) |
 | `0x70..0x78` | 9 | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
 | `0x80..0xFF` | 128 | `REG_ROMS` | 16 × 8-byte ROM table |
 
@@ -48,12 +48,24 @@ still reports the total.
 
 ## Writable registers
 
-Only `REG_SPEED` (`0x0F`) and `REG_CMD` (`0x60`) accept writes. A write
-is latched at STOP and applied when the current transaction finishes; an
-aborted transfer (ACKFAIL/BUSERR/ARLOST/OUF) discards the pending value.
+Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`) and `REG_SELECTED` (`0x61`)
+accept writes. A write is latched at STOP and applied when the current
+transaction finishes; an aborted transfer (ACKFAIL/BUSERR/ARLOST/OUF)
+discards the pending command or speed change.
+
+Writes to every other address are ignored; the register pointer still
+advances, so a block write cannot modify the read-only snapshot.
+`REG_SPEED` accepts only `0` and `1`; other values are ignored.
+`REG_SELECTED` keeps the low nibble only. A selection at or beyond the
+DS18B20 count publishes `0xFF` in all nine scratchpad bytes instead of a
+stale scratchpad.
+`REG_CMD` is queued: if the manager is busy, the command runs when the
+current cycle reaches its idle state, and a later command overwrites a
+still-pending one.
 
 ## Source of truth
 
-Register constants live in `app/main.c` (`REG_*` defines) and are
-duplicated in `tools/onewire_demo.py` for the demo client. Keep all three
-in sync when the map changes.
+Register constants live in `src/manager.h` and are mirrored in
+`app/main.c`, `tools/onewire_demo.py` and the RP2040 tester
+(`tools/rp2040-tester/src/regmap.h`). Keep all copies in sync when the
+map changes.

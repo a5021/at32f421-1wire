@@ -40,9 +40,20 @@
   `CONTRIBUTING.md`, `HARDWARE-NOTES.md`.
 
 ### Added
+- **Bridge:** reads of `0x0F`, `0x60`, `0x61` are the only writable
+  registers; every other write is ignored while the pointer still advances.
+  `REG_SELECTED` is now writable (low nibble) and a selection outside the
+  DS18B20 table publishes nine `0xFF` bytes instead of a stale scratchpad.
+- **Tester:** `tools/rp2040-tester/` — RP2040/Pico autonomous conformance
+  tester for the `0x42` bridge. 42 tests cover the bus at 100/400 kHz,
+  repeated START, turnaround, the register map, read-only enforcement,
+  snapshot tearing, sensors, rescans, DS2431, 10 000-read stress and fuzzing.
+  SCL is sampled at 62.5 MHz by PIO, so the reported frequency is measured,
+  not assumed.
 - Host test `tests/test_manager.c` for the manager command path
   (332 checks total, 0 failures).
 
+## 1c431b6 — Optimize hot paths
 
 I2C idle early-out, publish copies, LTO, host block read. 5.7 KB text /
 2.7 KB BSS (Make), 4.3 KB text / 2.1 KB BSS (CMake). 320 host checks, 0

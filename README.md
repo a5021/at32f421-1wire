@@ -92,7 +92,7 @@ registers, invalid-slot markers). Short summary:
 | `0x40..0x47` | `REG_EEPROM` | Last DS2431 read block |
 | `0x48` | `REG_EEPROM_STATUS` | DS2431 status (`0x00` OK, `0xFF` invalid) |
 | `0x60` | `REG_CMD` | Command: `1` rescan, `2` reread DS2431, `3` clear counters |
-| `0x61` | `REG_SELECTED` | Sensor whose scratchpad is exposed (low nibble) |
+| `0x61` | `REG_SELECTED` | Sensor whose scratchpad is exposed (low nibble, writable) |
 | `0x70..0x78` | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
 | `0x80..0xFF` | `REG_ROMS` | 16 × 8-byte ROM table |
 
@@ -110,13 +110,24 @@ python tools/onewire_demo.py --rescan --speed 400
 The CH341A bridge itself generates about 100 kHz; `--speed 400` changes the
 slave timing, but a 400 kHz master is needed to verify 400 kHz on the wire.
 
+Only `REG_SPEED`, `REG_CMD` and `REG_SELECTED` are writable; writes to any
+other register are ignored. The command is queued while the manager is busy.
+
+### Conformance tester (RP2040)
+
+`tools/rp2040-tester/` is an autonomous Pico tester for this bridge: 42
+tests, 400 kHz measured with a PIO sampler, stress and fuzzing, verdict on
+the LED and JSON-free text over USB CDC. See its README for wiring, build
+and the full test list. It also documents the 2.2 kOhm pull-up requirement
+and the need to disconnect the CH341A.
+
 ## Build
 
 Requires `arm-none-eabi-gcc` (newlib) and GNU make.
 
 ```sh
 make            # build/at32f421-1wire.elf + .hex + .bin
-make test       # host tests (9 suites, 320 checks)
+make test       # host tests (9 suites, 332 checks)
 make size
 ```
 
