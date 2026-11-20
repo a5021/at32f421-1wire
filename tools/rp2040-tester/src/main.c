@@ -2,12 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "hardware/adc.h"
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
 #include "pico/bootrom.h"
 #include "pico/stdlib.h"
 
+#include "crc8.h"
 #include "i2c_util.h"
+#include "lineedit.h"
 #include "regmap.h"
 #include "scl_probe.h"
 #include "tests.h"
@@ -34,12 +37,17 @@ void suite_map(void);
 void suite_ow(void);
 void suite_stress(void);
 
+static lineedit_t editor;
+
 static bool     running;
 static int      fail_code;
 static uint64_t led_next_us;
 static bool     led_state;
 static int      fail_step;
 static uint64_t fail_next_us;
+static bool     adc_ready;
+
+static void seed_history(lineedit_t *le);
 
 static void led_poll(void)
 {
@@ -78,13 +86,58 @@ void service(void)
 
     led_poll();
     while ((c = getchar_timeout_us(0)) >= 0) {
-        if ((c == 3) || (c == 'a') || (c == 'A')) {
+        if (c == 3) {                    /* Ctrl-C only: arrows must not abort */
             if (!g_abort) {
                 printf("\n[abort requested]\n");
             }
             g_abort = true;
         }
     }
+}
+
+static const char *family_name(uint8_t family)
+{
+    switch (family) {
+    case FAMILY_DS18B20:
+        return "DS18B20";
+    case FAMILY_DS2431:
+        return "DS2431";
+    case FAMILY_DS2413:
+        return "DS2413";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *st_text(uint8_t st)
+{
+    static const char *const names[] = {
+        "ok", "busy", "no presence", "crc error", "param",
+        "bus error", "end"
+    };
+
+    return (st < sizeof(names) / sizeof(names[0])) ? names[st] : "-";
+}
+
+static void print_temp(uint16_t raw)
+{
+    if (raw == INVALID_TEMP) {
+        printf("      -");
+        return;
+    }
+
+    int32_t milli = (int32_t)(int16_t)raw * 1000 / 16;
+
+    if (milli < 0) {
+        printf("-%d.%03d", (int)(-milli / 1000), (int)(-milli % 1000));
+    } else {
+        printf("%d.%03d", (int)(milli / 1000), (int)(milli % 1000));
+    }
+}
+
+static void print_us(uint32_t us)
+{
+    printf("%u.%03u", us / 1000u, us % 1000u);
 }
 
 static int first_failure_suite(void)
@@ -152,6 +205,7 @@ static void print_info(void)
     printf("sampler %u kHz (%u ns per sample)\n",
            (unsigned)(clock_get_hz(clk_sys) / 2000u),
            (unsigned)(2000000000u / clock_get_hz(clk_sys)));
+    printf("history %d entries\n", lineedit_history_count(&editor));
 }
 
 static void print_status(void)
@@ -202,6 +256,488 @@ static void print_scan(void)
     printf(" (%d)\n", found);
 }
 
+static void cmd_temp(const char *arg)
+{
+    uint8_t map[256];
+
+    if (!map_stable(map, 3000u)) {
+        printf("no snapshot\n");
+        return;
+    }
+
+    int want = (arg != NULL && arg[0] != '\0') ? atoi(arg) : -1;
+    int ds = map[REG_DS18B20];
+    int idx = 0;
+
+    if (ds == 0) {
+        printf("no DS18B20 found\n");
+        return;
+    }
+    if ((want >= ds) || (want < -1)) {
+        printf("sensor %d out of range (0..%d)\n", want, ds - 1);
+        return;
+    }
+
+    for (int i = 0; (i < map_stored_devices(map)) && (idx < ds); i++) {
+        const uint8_t *rom = &map[REG_ROMS + 8 * i];
+
+        if (rom[0] != FAMILY_DS18B20) {
+            continue;
+        }
+        if ((want < 0) || (want == idx)) {
+            uint16_t raw = (uint16_t)(map[REG_TEMP + 2 * idx] |
+                                      (map[REG_TEMP + 2 * idx + 1] << 8));
+            uint8_t st = map[REG_TEMP_STATUS + idx];
+
+            printf("#%d ", idx);
+            print_temp(raw);
+            printf(" C  %-11s rom %02X%02X%02X%02X%02X%02X%02X%02X\n",
+                   st_text(st), rom[0], rom[1], rom[2], rom[3], rom[4],
+                   rom[5], rom[6], rom[7]);
+        }
+        idx++;
+    }
+}
+
+static void cmd_roms(void)
+{
+    uint8_t map[256];
+
+    if (!map_stable(map, 3000u)) {
+        printf("no snapshot\n");
+        return;
+    }
+
+    int stored = map_stored_devices(map);
+    int empty = 0;
+
+    for (int i = 0; i < stored; i++) {
+        const uint8_t *rom = &map[REG_ROMS + 8 * i];
+        bool blank = true;
+
+        for (int b = 0; b < 8; b++) {
+            if (rom[b] != 0xFFu) {
+                blank = false;
+            }
+        }
+        if (blank) {
+            empty++;
+            continue;
+        }
+        uint8_t crc = crc8_dallas(rom, 7u);
+
+        printf("#%-2d %02X %02X %02X %02X %02X %02X %02X %02X  %-8s crc %s\n",
+               i, rom[0], rom[1], rom[2], rom[3], rom[4], rom[5], rom[6],
+               rom[7], family_name(rom[0]), crc == rom[7] ? "ok" : "BAD");
+    }
+    printf("%u devices, %u ds18b20, %d empty slots\n", map[REG_DEVICES],
+           map[REG_DS18B20], empty);
+}
+
+static void cmd_scratch(const char *arg)
+{
+    uint8_t map[256];
+    uint8_t alt[256];
+    uint8_t sp[9];
+    int n = (arg != NULL && arg[0] != '\0') ? atoi(arg) : 0;
+
+    if (!map_stable(map, 3000u)) {
+        printf("no snapshot\n");
+        return;
+    }
+    if ((n < 0) || (n >= (int)map[REG_DS18B20])) {
+        printf("sensor %d out of range (0..%d)\n", n,
+               (int)map[REG_DS18B20] - 1);
+        return;
+    }
+
+    select_sensor((uint8_t)n);
+    uint16_t cycle = map_cycle(map);
+
+    printf("selecting %d, waiting for a cycle...\n", n);
+    for (int i = 0; i < 2; i++) {
+        if (!map_wait_cycle(cycle, alt, 8000u)) {
+            printf("timeout\n");
+            select_sensor(0u);
+            return;
+        }
+        cycle = map_cycle(alt);
+    }
+    if (!read_scratch(sp)) {
+        printf("read failed\n");
+        select_sensor(0u);
+        return;
+    }
+
+    uint16_t raw = (uint16_t)(sp[0] | ((uint16_t)sp[1] << 8));
+    uint8_t crc = crc8_dallas(sp, 8u);
+    int res = 9 + ((sp[4] >> 5) & 3);
+
+    printf("raw %04X  ", raw);
+    print_temp(raw);
+    printf(" C  TH %d  TL %d  cfg 0x%02X (%d bit)  crc %s\n",
+           (int8_t)sp[2], (int8_t)sp[3], sp[4], res,
+           crc == sp[8] ? "ok" : "BAD");
+    select_sensor(0u);
+}
+
+static void cmd_eeprom(void)
+{
+    uint8_t map[256];
+
+    if (!map_stable(map, 3000u)) {
+        printf("no snapshot\n");
+        return;
+    }
+
+    printf("DS2431:");
+    for (int i = 0; i < 8; i++) {
+        printf(" %02X", map[REG_EEPROM + i]);
+    }
+    printf("  status %s\n", st_text(map[REG_EEPROM_STATUS]));
+}
+
+static void cmd_dump(const char *arg)
+{
+    uint8_t map[256];
+    int start = 0;
+    int len = 96;
+
+    if ((arg != NULL) && (arg[0] != '\0')) {
+        (void)sscanf(arg, "%i %i", &start, &len);
+    }
+    if ((start < 0) || (start > 255) || (len < 0)) {
+        printf("usage: dump [start] [len]\n");
+        return;
+    }
+    if (start + len > 256) {
+        len = 256 - start;
+    }
+    if (!map_stable(map, 3000u)) {
+        printf("no snapshot\n");
+        return;
+    }
+
+    for (int row = 0; row < len; row += 16) {
+        printf("%02X:", start + row);
+        for (int i = 0; i < 16; i++) {
+            if (row + i < len) {
+                printf(" %02X", map[start + row + i]);
+            } else {
+                printf("   ");
+            }
+        }
+        printf("  ");
+        for (int i = 0; i < 16 && row + i < len; i++) {
+            uint8_t b = map[start + row + i];
+
+            putchar((b >= 32u && b < 127u) ? (char)b : '.');
+        }
+        printf("\n");
+    }
+}
+
+static void cmd_reg(const char *arg)
+{
+    if ((arg == NULL) || (arg[0] == '\0')) {
+        printf("usage: reg <addr>\n");
+        return;
+    }
+    uint32_t addr = (uint32_t)strtoul(arg, NULL, 0) & 0xFFu;
+    uint8_t v;
+
+    if (bus_read_reg((uint8_t)addr, &v, 1u) == 1) {
+        printf("0x%02X = 0x%02X (%u)\n", addr, v, v);
+    } else {
+        printf("read failed\n");
+    }
+}
+
+static void cmd_send_cmd(const char *arg)
+{
+    if ((arg == NULL) || (arg[0] == '\0')) {
+        printf("usage: cmd <n>\n");
+        return;
+    }
+    uint8_t v = (uint8_t)strtoul(arg, NULL, 0);
+
+    printf(send_cmd(v) ? "command %u queued\n" : "command failed\n", v);
+}
+
+static void cmd_select(const char *arg)
+{
+    if ((arg == NULL) || (arg[0] == '\0')) {
+        printf("usage: select <n>\n");
+        return;
+    }
+    uint8_t v = (uint8_t)(strtoul(arg, NULL, 0) & 0x0Fu);
+
+    printf(select_sensor(v) ? "selected %u\n" : "select failed\n", v);
+}
+
+static void cmd_probe(const char *arg)
+{
+    if ((arg == NULL) || (arg[0] == '\0')) {
+        printf("usage: probe <addr>\n");
+        return;
+    }
+    uint8_t addr = (uint8_t)(strtoul(arg, NULL, 0) & 0x7Fu);
+
+    printf("0x%02X: %s\n", addr, bus_probe(addr) ? "ack" : "nack");
+}
+
+static void cmd_sample(const char *arg)
+{
+    uint8_t buf[64];
+    scl_stats_t st;
+    int len = (arg != NULL && arg[0] != '\0') ? atoi(arg) : 32;
+
+    if (len < 1) {
+        len = 32;
+    }
+    if (len > (int)sizeof(buf)) {
+        len = (int)sizeof(buf);
+    }
+
+    scl_probe_start();
+    int got = bus_read_reg(REG_ROMS, buf, (size_t)len);
+    uint32_t words = scl_probe_stop();
+
+    if (got != len) {
+        printf("bus read failed\n");
+        return;
+    }
+    if (!scl_probe_analyze(words, &st)) {
+        printf("no SCL edges captured\n");
+        return;
+    }
+
+    printf("%d kHz fast, %d kHz median, %u periods\n",
+           (int)(st.khz_fast + 0.5f), (int)(st.khz_med + 0.5f), st.periods);
+    printf("period min ");
+    print_us((uint32_t)(st.min_period_us * 1000.0f + 0.5f));
+    printf(" us, med ");
+    print_us((uint32_t)(st.med_period_us * 1000.0f + 0.5f));
+    printf(" us, max ");
+    print_us((uint32_t)(st.max_period_us * 1000.0f + 0.5f));
+    printf(" us\nmax low ");
+    print_us((uint32_t)(st.max_low_us * 1000.0f + 0.5f));
+    printf(" us\n");
+}
+
+static uint32_t bench_read(uint32_t master_hz, uint8_t slave_speed)
+{
+    uint8_t buf[64];
+
+    bus_set_speed(BUS_SPEED_100K);
+    write_speed(slave_speed);
+    sleep_ms(30u);
+    bus_set_speed(master_hz);
+    sleep_ms(30u);
+
+    absolute_time_t t0 = get_absolute_time();
+    int got = bus_read_reg(REG_ROMS, buf, sizeof(buf));
+    int64_t us = absolute_time_diff_us(t0, get_absolute_time());
+
+    return (got == (int)sizeof(buf) && us > 0) ? (uint32_t)us : 0u;
+}
+
+static void cmd_bench(void)
+{
+    uint32_t us100 = bench_read(BUS_SPEED_100K, 0u);
+    uint32_t us400 = bench_read(BUS_SPEED_400K, 1u);
+
+    if ((us100 == 0u) || (us400 == 0u)) {
+        printf("bench failed\n");
+        return;
+    }
+
+    printf("64 bytes: 100 kHz ");
+    print_us(us100);
+    printf(" us, 400 kHz ");
+    print_us(us400);
+    printf(" us, ratio %u.%ux\n", (us100 * 10u) / us400,
+           ((us100 * 10u) % us400) * 10u / us400);
+}
+
+static void cmd_speed_auto(void)
+{
+    bus_set_speed(BUS_SPEED_100K);
+    write_speed(1u);
+    sleep_ms(30u);
+    bus_set_speed(BUS_SPEED_400K);
+    sleep_ms(20u);
+
+    if (bus_probe(BRIDGE_ADDR)) {
+        printf("400 kHz works\n");
+        return;
+    }
+
+    bus_set_speed(BUS_SPEED_100K);
+    write_speed(0u);
+    printf("400 kHz failed, using 100 kHz\n");
+}
+
+static void cmd_watch(const char *arg)
+{
+    const char *what = ((arg != NULL) && (arg[0] != '\0')) ? arg : "status";
+
+    printf("watch %s: any key stops\n", what);
+    for (;;) {
+        if (getchar_timeout_us(0) >= 0) {
+            break;
+        }
+
+        if (strcmp(what, "temp") == 0) {
+            uint8_t map[256];
+
+            if (map_read(map)) {
+                printf("cycle %u:", map_cycle(map));
+                int ds = map[REG_DS18B20];
+
+                for (int i = 0; (i < ds) && (i < (int)DEV_MAX); i++) {
+                    uint16_t raw = (uint16_t)(map[REG_TEMP + 2 * i] |
+                                              (map[REG_TEMP + 2 * i + 1] << 8));
+
+                    printf(" ");
+                    print_temp(raw);
+                }
+                printf("\n");
+            } else {
+                printf("read failed\n");
+            }
+        } else if (strcmp(what, "cycle") == 0) {
+            uint8_t raw[2];
+
+            if (bus_read_reg(REG_CYCLE_L, raw, 2u) == 2) {
+                printf("cycle %u\n", (unsigned)(raw[0] | (raw[1] << 8)));
+            } else {
+                printf("read failed\n");
+            }
+        } else {
+            print_status();
+        }
+        sleep_ms(1000u);
+    }
+    printf("\n[watch stopped]\n");
+}
+
+static void cmd_adc(void)
+{
+    if (!adc_ready) {
+        adc_init();
+        adc_set_temp_sensor_enabled(true);
+        adc_gpio_init(29);           /* Pico VSYS/3 on ADC3 */
+        adc_ready = true;
+    }
+
+    adc_select_input(3);
+    uint32_t raw_v = adc_read();
+    uint32_t mv = raw_v * 3u * 3300u / 4096u;
+
+    adc_select_input(4);
+    uint32_t raw_t = adc_read();
+    int32_t milli_c = 27000 - (int32_t)(((int64_t)raw_t * 3300 * 1000 /
+                                         4096 - 706000) / 1721);
+
+    printf("VSYS %u mV, chip ", mv);
+    if (milli_c < 0) {
+        printf("-%d.%03d", (int)(-milli_c / 1000), (int)(-milli_c % 1000));
+    } else {
+        printf("%d.%03d", (int)(milli_c / 1000), (int)(milli_c % 1000));
+    }
+    printf(" C\n");
+}
+
+static const char *const seed_commands[] = {
+    "bootsel", "adc", "watch temp", "bench", "sample", "dump", "roms",
+    "eeprom", "scratch 0", "select 0", "cmd 1", "reg 0x00", "probe 0x42",
+    "scan", "ping", "speed auto", "speed 400", "speed 100", "rescan",
+    "info", "results", "run soak 60", "run full", "run quick", "help",
+    "?", "temp"
+};
+
+static void seed_history(lineedit_t *le)
+{
+    lineedit_clear_history(le);
+    for (unsigned i = 0; i < sizeof(seed_commands) / sizeof(seed_commands[0]);
+         i++) {
+        lineedit_add_history(le, seed_commands[i]);
+    }
+}
+
+static void cmd_history(const char *arg)
+{
+    if ((arg != NULL) && (strcmp(arg, "clear") == 0)) {
+        seed_history(&editor);
+        printf("history reset to %d commands\n",
+               lineedit_history_count(&editor));
+        return;
+    }
+
+    for (int i = 0; i < lineedit_history_count(&editor); i++) {
+        printf("%2d  %s\n", i + 1, lineedit_history_at(&editor, i));
+    }
+}
+
+typedef struct {
+    const char *name;
+    const char *usage;
+    const char *desc;
+} cmd_desc_t;
+
+static const cmd_desc_t command_table[] = {
+    { "?", "?", "command list" },
+    { "help", "help [cmd]", "command list or detail" },
+    { "run", "run quick|full|soak N", "run the test suites" },
+    { "results", "results", "print the last results" },
+    { "status", "status", "uptime, link, target, snapshot" },
+    { "info", "info", "version, clocks, pins, history size" },
+    { "ping", "ping", "probe 0x42" },
+    { "scan", "scan", "probe 0x08..0x77" },
+    { "speed", "speed 100|400|auto", "set link and slave timing" },
+    { "rescan", "rescan", "queue a ROM search" },
+    { "temp", "temp [n]", "temperatures in C" },
+    { "roms", "roms", "ROM table with family and CRC" },
+    { "scratch", "scratch [n]", "decode a DS18B20 scratchpad" },
+    { "eeprom", "eeprom", "DS2431 bytes and status" },
+    { "dump", "dump [start] [len]", "hex dump of the register map" },
+    { "reg", "reg <addr>", "read one register" },
+    { "cmd", "cmd <n>", "write REG_CMD" },
+    { "select", "select <n>", "write REG_SELECTED" },
+    { "probe", "probe <addr>", "probe one I2C address" },
+    { "sample", "sample [bytes]", "measure SCL with PIO" },
+    { "bench", "bench", "100 vs 400 kHz read time" },
+    { "watch", "watch temp|status|cycle", "1 Hz display until a key" },
+    { "adc", "adc", "VSYS and chip temperature" },
+    { "clear", "clear", "clear the terminal" },
+    { "history", "history [clear]", "show or reset command history" },
+    { "abort", "abort", "stop the running suite" },
+    { "bootsel", "bootsel", "reboot into the UF2 bootloader" },
+};
+
+static void cmd_help(const char *arg)
+{
+    if ((arg == NULL) || (arg[0] == '\0')) {
+        for (unsigned i = 0; i < sizeof(command_table) / sizeof(command_table[0]);
+             i++) {
+            printf("  %-10s %s\n", command_table[i].name,
+                   command_table[i].desc);
+        }
+        return;
+    }
+
+    for (unsigned i = 0; i < sizeof(command_table) / sizeof(command_table[0]);
+         i++) {
+        if (strcmp(command_table[i].name, arg) == 0) {
+            printf("%s\n  %s\n", command_table[i].usage,
+                   command_table[i].desc);
+            return;
+        }
+    }
+    printf("no help for %s\n", arg);
+}
+
 static int run_all(bool stress)
 {
     tests_reset();
@@ -222,13 +758,7 @@ static int run_all(bool stress)
 
     running = false;
 
-    int fail = 0;
-
-    for (int i = 0; i < g_result_count; i++) {
-        if (!g_results[i].ok) {
-            fail++;
-        }
-    }
+    int fail = count_failures();
 
     printf("\nSUMMARY: %d/%d passed, %d failed%s\n", g_result_count - fail,
            g_result_count, fail, g_abort ? " (aborted)" : "");
@@ -244,105 +774,177 @@ static int run_all(bool stress)
     return fail;
 }
 
+static void split_command(char *line, char **cmd, char **arg)
+{
+    char *p = line;
+
+    while ((*p == ' ') || (*p == '\t')) {
+        p++;
+    }
+    *cmd = p;
+    while ((*p != '\0') && (*p != ' ') && (*p != '\t')) {
+        p++;
+    }
+    if (*p != '\0') {
+        *p++ = '\0';
+        while ((*p == ' ') || (*p == '\t')) {
+            p++;
+        }
+    }
+    *arg = p;
+}
+
 static void handle_line(char *line)
 {
-    if ((strcmp(line, "help") == 0) || (strcmp(line, "?") == 0)) {
-        printf("run quick | run full | run soak N | results | abort\n");
-        printf("info | status | ping | scan | speed 100|400 | rescan | bootsel\n");
+    char *cmd;
+    char *arg;
+
+    split_command(line, &cmd, &arg);
+
+    if ((strcmp(cmd, "help") == 0) || (strcmp(cmd, "?") == 0)) {
+        cmd_help(arg);
         return;
     }
-    if (strcmp(line, "info") == 0) {
+    if (strcmp(cmd, "info") == 0) {
         print_info();
         return;
     }
-    if (strcmp(line, "status") == 0) {
+    if (strcmp(cmd, "status") == 0) {
         print_status();
         return;
     }
-    if (strcmp(line, "ping") == 0) {
+    if (strcmp(cmd, "ping") == 0) {
         printf("0x%02X: %s\n", BRIDGE_ADDR,
                bus_probe(BRIDGE_ADDR) ? "ack" : "nack");
         return;
     }
-    if (strcmp(line, "scan") == 0) {
+    if (strcmp(cmd, "scan") == 0) {
         print_scan();
         return;
     }
-    if (strcmp(line, "rescan") == 0) {
-        if (send_cmd(CMD_RESCAN)) {
-            printf("rescan queued\n");
-        } else {
-            printf("rescan failed\n");
-        }
+    if (strcmp(cmd, "rescan") == 0) {
+        printf(send_cmd(CMD_RESCAN) ? "rescan queued\n" : "rescan failed\n");
         return;
     }
-    if (strncmp(line, "speed ", 6) == 0) {
-        int khz = atoi(&line[6]);
-        uint8_t readback = 0xEEu;
-
-        if (khz == 100) {
+    if (strcmp(cmd, "temp") == 0) {
+        cmd_temp(arg);
+        return;
+    }
+    if (strcmp(cmd, "roms") == 0) {
+        cmd_roms();
+        return;
+    }
+    if (strcmp(cmd, "scratch") == 0) {
+        cmd_scratch(arg);
+        return;
+    }
+    if (strcmp(cmd, "eeprom") == 0) {
+        cmd_eeprom();
+        return;
+    }
+    if (strcmp(cmd, "dump") == 0) {
+        cmd_dump(arg);
+        return;
+    }
+    if (strcmp(cmd, "reg") == 0) {
+        cmd_reg(arg);
+        return;
+    }
+    if (strcmp(cmd, "cmd") == 0) {
+        cmd_send_cmd(arg);
+        return;
+    }
+    if (strcmp(cmd, "select") == 0) {
+        cmd_select(arg);
+        return;
+    }
+    if (strcmp(cmd, "probe") == 0) {
+        cmd_probe(arg);
+        return;
+    }
+    if (strcmp(cmd, "sample") == 0) {
+        cmd_sample(arg);
+        return;
+    }
+    if (strcmp(cmd, "bench") == 0) {
+        cmd_bench();
+        return;
+    }
+    if (strcmp(cmd, "speed") == 0) {
+        if (strcmp(arg, "100") == 0) {
             bus_set_speed(BUS_SPEED_100K);
             write_speed(0u);
-            bus_read_reg(REG_SPEED, &readback, 1u);
-            printf("link %u kHz, slave %u\n",
-                   (unsigned)(bus_speed() / 1000u), readback);
-        } else if (khz == 400) {
+            printf("link %u kHz\n", (unsigned)(bus_speed() / 1000u));
+        } else if (strcmp(arg, "400") == 0) {
             bus_set_speed(BUS_SPEED_100K);
             write_speed(1u);
             sleep_ms(30u);
             bus_set_speed(BUS_SPEED_400K);
-            bus_read_reg(REG_SPEED, &readback, 1u);
-            printf("link %u kHz, slave %u\n",
-                   (unsigned)(bus_speed() / 1000u), readback);
+            printf("link %u kHz\n", (unsigned)(bus_speed() / 1000u));
+        } else if (strcmp(arg, "auto") == 0) {
+            cmd_speed_auto();
         } else {
-            printf("usage: speed 100 | speed 400\n");
+            printf("usage: speed 100 | 400 | auto\n");
         }
         return;
     }
-    if (strcmp(line, "run quick") == 0) {
-        run_all(false);
+    if (strcmp(cmd, "watch") == 0) {
+        cmd_watch(arg);
         return;
     }
-    if (strcmp(line, "run full") == 0) {
-        run_all(true);
+    if (strcmp(cmd, "adc") == 0) {
+        cmd_adc();
         return;
     }
-    if (strncmp(line, "run soak ", 9) == 0) {
-        uint32_t seconds = (uint32_t)strtoul(&line[9], NULL, 10);
+    if (strcmp(cmd, "clear") == 0) {
+        printf("\x1b[2J\x1b[H");
+        return;
+    }
+    if (strcmp(cmd, "history") == 0) {
+        cmd_history(arg);
+        return;
+    }
+    if (strcmp(cmd, "run") == 0) {
+        if (strcmp(arg, "quick") == 0) {
+            run_all(false);
+        } else if (strcmp(arg, "full") == 0) {
+            run_all(true);
+        } else if (strncmp(arg, "soak ", 5) == 0) {
+            uint32_t seconds = (uint32_t)strtoul(&arg[5], NULL, 10);
 
-        if (seconds == 0u) {
-            printf("usage: run soak N (seconds)\n");
-            return;
+            if (seconds == 0u) {
+                printf("usage: run soak N\n");
+            } else {
+                g_soak_seconds = seconds;
+                run_all(true);
+            }
+        } else {
+            printf("usage: run quick | full | soak N\n");
         }
-        g_soak_seconds = seconds;
-        run_all(true);
         return;
     }
-    if (strcmp(line, "results") == 0) {
+    if (strcmp(cmd, "results") == 0) {
         print_results();
         return;
     }
-    if (strcmp(line, "abort") == 0) {
+    if (strcmp(cmd, "abort") == 0) {
         g_abort = true;
         printf("abort requested\n");
         return;
     }
-    if (strcmp(line, "bootsel") == 0) {
+    if (strcmp(cmd, "bootsel") == 0) {
         printf("rebooting to BOOTSEL\n");
         sleep_ms(50u);
         reset_usb_boot(0, 0);
         return;
     }
-    if (line[0] != '\0') {
-        printf("unknown command: %s (try ?)\n", line);
+    if (cmd[0] != '\0') {
+        printf("unknown command: %s (try ?)\n", cmd);
     }
 }
 
 int main(void)
 {
-    char line[64];
-    int line_len = 0;
-
     stdio_init_all();
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
@@ -367,29 +969,22 @@ int main(void)
         run_all(true);
     }
 
+    lineedit_init(&editor, "> ");
+    seed_history(&editor);
     printf("ready: ? for commands\n");
-    printf("> ");
+    lineedit_redraw(&editor);
 
     for (;;) {
         int c;
 
         led_poll();
-        while ((c = getchar_timeout_us(0)) >= 0) {
-            if ((c == '\r') || (c == '\n')) {
-                printf("\n");
-                line[line_len] = '\0';
-                handle_line(line);
-                line_len = 0;
-                printf("> ");
-            } else if ((c == 8) || (c == 127)) {
-                if (line_len > 0) {
-                    line_len--;
-                    printf("\b \b");
-                }
-            } else if ((c >= 32) && (c < 127) &&
-                       (line_len < (int)sizeof(line) - 1)) {
-                line[line_len++] = (char)c;
-                putchar(c);
+        c = getchar_timeout_us(0);
+        if (c >= 0) {
+            const char *line = lineedit_feed(&editor, c);
+
+            if (line != NULL) {
+                handle_line((char *)line);
+                lineedit_redraw(&editor);
             }
         }
         tight_loop_contents();

@@ -23,6 +23,7 @@ add_executable(i2c_tester
     src/i2c_util.c
     src/crc8.c
     src/tests.c
+    src/lineedit.c
     src/scl_probe.c
     src/suites_bus.c
     src/suites_map.c
@@ -47,6 +48,7 @@ target_link_libraries(i2c_tester
     hardware_i2c
     hardware_pio
     hardware_dma
+    hardware_adc
 )
 
 pico_enable_stdio_usb(i2c_tester 1)

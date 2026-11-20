@@ -6,6 +6,7 @@ build-*/
 *.map
 *.o
 *.d
+*.exe
 tools/openocd-at32/
 __pycache__/
 *.pyc

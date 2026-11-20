@@ -49,7 +49,10 @@
   repeated START, turnaround, the register map, read-only enforcement,
   snapshot tearing, sensors, rescans, DS2431, 10 000-read stress and fuzzing.
   SCL is sampled at 62.5 MHz by PIO, so the reported frequency is measured,
-  not assumed.
+  not assumed. USB CDC console has a line editor (history, arrows, Home/End,
+  Delete, Ctrl-A/E/K/U/W/L), a preloaded command history and diagnostic
+  commands (`temp`, `roms`, `scratch`, `eeprom`, `dump`, `reg`, `cmd`,
+  `select`, `probe`, `sample`, `bench`, `watch`, `adc`).
 - Host test `tests/test_manager.c` for the manager command path
   (332 checks total, 0 failures).
 

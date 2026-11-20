@@ -32,6 +32,12 @@ cmake --build build
 The PIO sampler is a single hand-encoded `in pins, 1` instruction, so the
 build does not need the `pioasm` host tool.
 
+Line editor host test:
+
+```sh
+make -C test test
+```
+
 Flash: hold BOOTSEL, plug the Pico in, copy `build/i2c_tester.uf2` to the
 `RPI-RP2` drive.
 
@@ -45,21 +51,42 @@ run quick        T01-T34, about 40 s
 run full         T01-T42, about 3 min
 run soak N       full suite with the T36 soak extended to N seconds
 results          print the last results again
-abort            stop after the current test (also Ctrl-C or 'a' during a run)
+abort            stop after the current test
 info             tester version, SDK, clocks, pins, sampler rate
 status           uptime, link speed, target, last run, snapshot summary
 ping             probe 0x42 only
 scan             probe every address 0x08..0x77
-speed 100|400    set the link and the slave timing, safely
+speed 100|400|auto   set the link and the slave timing
 rescan           queue a 1-Wire ROM search
+temp [n]         temperatures in C, all or one sensor
+roms             ROM table with family and CRC-8
+scratch [n]      select a sensor, wait a cycle, decode its scratchpad
+eeprom           DS2431 bytes and status
+dump [start] [len]   hex dump of the register map (default 0x00, 96 bytes)
+reg <addr>       read one register
+cmd <n>          write REG_CMD
+select <n>       write REG_SELECTED
+probe <addr>     probe one I2C address
+sample [bytes]   measure SCL with PIO (kHz, min/med/max, stretch)
+bench            100 vs 400 kHz on a 64-byte read
+watch temp|status|cycle   1 Hz display, any key stops
+adc              RP2040 VSYS and chip temperature
+clear            clear the terminal
+history [clear]  show or reset the command history
 bootsel          reboot the Pico into the UF2 bootloader
-? or help        command list
+? or help        command list; help <cmd> for details
 ```
 
 The prompt is `> `. The firmware echoes typed characters and supports
-backspace, so the terminal needs no local echo. While a run is active only
-Ctrl-C and `a` are read: they print `[abort requested]` and stop after the
-current test.
+Backspace, Left/Right, Home/End (`ESC [ H/F` or `1~/4~`), Delete (`3~`),
+Ctrl-A/E/K/U/W/L. Up/Down walk the history, which starts preloaded with
+every command above and keeps exact duplicates out: typing an existing
+command moves it to the newest position. `history clear` restores the
+preloaded list.
+
+While a suite is running only Ctrl-C is read: it prints
+`[abort requested]` and stops after the current test. Arrow keys and other
+characters do not abort.
 
 LED:
 
