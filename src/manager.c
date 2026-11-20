@@ -36,6 +36,7 @@ static uint32_t last_error;
 static uint32_t ok_count;
 static uint32_t err_count;
 static uint32_t cycle;
+static uint8_t  pub_seq;
 
 /* Latched by the I2C bridge at STOP; consumed by manager_poll(). */
 static uint32_t g_cmd;
@@ -78,7 +79,6 @@ void manager_init(void)
     memset((void *)g_regs, 0, sizeof(g_regs));
     g_regs[REG_MAGIC] = 0x5Au;
     g_regs[REG_VERSION] = 0x01u;
-
     ds18b20_init(&sensor, true);
     ds2431_init(&eeprom);
     clear_results();
@@ -116,6 +116,8 @@ static void publish(void)
         flags |= FLAG_TEMP_ERROR;
     }
 
+    g_regs[REG_SEQ] = ++pub_seq;        /* odd: update in progress */
+    cycle++;
     g_regs[REG_MAGIC] = 0x5Au;
     g_regs[REG_VERSION] = 0x01u;
     g_regs[REG_FLAGS] = flags;
@@ -159,6 +161,7 @@ static void publish(void)
         }
         roms_dirty = 0u;
     }
+    g_regs[REG_SEQ] = ++pub_seq;        /* even: snapshot stable */
 }
 
 static void manager_search(void)
@@ -347,7 +350,6 @@ void manager_poll(void)
             return;
         }
         publish();
-        cycle++;
         manager_state = MGR_WAIT;
         ow_delay_start(200000u);
         break;

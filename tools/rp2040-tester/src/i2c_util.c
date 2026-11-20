@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "hardware/gpio.h"
 #include "hardware/i2c.h"
 #include "pico/stdlib.h"
 
@@ -12,6 +13,28 @@
 
 static uint8_t  tx_buf[TX_MAX];
 static uint32_t current_speed = BUS_SPEED_400K;
+
+volatile uint32_t bus_err_timeout;
+volatile uint32_t bus_err_nack;
+volatile uint32_t bus_err_other;
+
+void bus_stats_reset(void)
+{
+    bus_err_timeout = 0u;
+    bus_err_nack = 0u;
+    bus_err_other = 0u;
+}
+
+static void count_err(int ret)
+{
+    if (ret == PICO_ERROR_TIMEOUT) {
+        bus_err_timeout++;
+    } else if (ret == PICO_ERROR_GENERIC) {
+        bus_err_nack++;
+    } else {
+        bus_err_other++;
+    }
+}
 
 void bus_init(void)
 {
@@ -35,6 +58,33 @@ uint32_t bus_speed(void)
 
 void bus_recover(void)
 {
+    /* Nine clocks plus a STOP release a slave that is holding SDA low after
+     * an aborted transfer.  Then the hardware I2C block is reinitialised. */
+    gpio_set_function(PIN_SDA, GPIO_FUNC_SIO);
+    gpio_set_function(PIN_SCL, GPIO_FUNC_SIO);
+    gpio_pull_up(PIN_SDA);
+    gpio_pull_up(PIN_SCL);
+    gpio_set_dir(PIN_SDA, GPIO_IN);
+    gpio_set_dir(PIN_SCL, GPIO_OUT);
+    gpio_put(PIN_SCL, 1);
+    busy_wait_us_32(5);
+
+    for (int i = 0; i < 9; i++) {
+        gpio_put(PIN_SCL, 0);
+        busy_wait_us_32(5);
+        gpio_put(PIN_SCL, 1);
+        busy_wait_us_32(5);
+    }
+
+    gpio_put(PIN_SDA, 0);
+    gpio_set_dir(PIN_SDA, GPIO_OUT);
+    busy_wait_us_32(5);
+    gpio_put(PIN_SCL, 1);
+    busy_wait_us_32(5);
+    gpio_put(PIN_SDA, 1);
+    busy_wait_us_32(5);
+    gpio_set_dir(PIN_SDA, GPIO_IN);
+
     i2c_init(I2C_INST, current_speed);
     gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
     gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
@@ -43,8 +93,12 @@ void bus_recover(void)
 bool bus_probe(uint8_t addr)
 {
     uint8_t b = 0u;
+    int ret = i2c_read_timeout_us(I2C_INST, addr, &b, 1u, false, BUS_PROBE_US);
 
-    return i2c_read_timeout_us(I2C_INST, addr, &b, 1u, false, BUS_PROBE_US) == 1;
+    if (ret == PICO_ERROR_TIMEOUT) {
+        bus_recover();
+    }
+    return ret == 1;
 }
 
 static bool tx_reg(uint8_t reg, const uint8_t *data, size_t len, bool nostop)
@@ -58,8 +112,15 @@ static bool tx_reg(uint8_t reg, const uint8_t *data, size_t len, bool nostop)
         memcpy(&tx_buf[1], data, len);
     }
 
-    return i2c_write_timeout_us(I2C_INST, BRIDGE_ADDR, tx_buf, len + 1u,
-                                nostop, BUS_TIMEOUT_US) == (int)(len + 1u);
+    int ret = i2c_write_timeout_us(I2C_INST, BRIDGE_ADDR, tx_buf, len + 1u,
+                                   nostop, BUS_TIMEOUT_US);
+    if (ret != (int)(len + 1u)) {
+        count_err(ret);
+    }
+    if (ret == PICO_ERROR_TIMEOUT) {
+        bus_recover();
+    }
+    return ret == (int)(len + 1u);
 }
 
 int bus_write_reg(uint8_t reg, const uint8_t *data, size_t len)
@@ -77,10 +138,19 @@ int bus_read_reg(uint8_t reg, uint8_t *buf, size_t len)
     if (!tx_reg(reg, NULL, 0u, false)) {
         return -1;
     }
+    /* Let the slave service STOPF before the next START. */
+    busy_wait_us_32(50);
 
     int got = i2c_read_timeout_us(I2C_INST, BRIDGE_ADDR, buf, len, false,
                                   BUS_TIMEOUT_US);
-    return (got == (int)len) ? got : -1;
+    if (got != (int)len) {
+        count_err(got);
+        if (got == PICO_ERROR_TIMEOUT) {
+            bus_recover();
+        }
+        return -1;
+    }
+    return got;
 }
 
 int bus_read_reg_nostop(uint8_t reg, uint8_t *buf, size_t len)
@@ -104,6 +174,12 @@ int bus_read_only(uint8_t *buf, size_t len)
     int got = i2c_read_timeout_us(I2C_INST, BRIDGE_ADDR, buf, len, false,
                                   BUS_TIMEOUT_US);
 
+    if (got != (int)len) {
+        count_err(got);
+    }
+    if (got == PICO_ERROR_TIMEOUT) {
+        bus_recover();
+    }
     return (got == (int)len) ? got : -1;
 }
 
@@ -123,15 +199,16 @@ bool map_stable(uint8_t *map, uint32_t timeout_ms)
     absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
 
     do {
-        uint8_t before[2];
-        uint8_t after[2];
+        uint8_t seq_before;
+        uint8_t seq_after;
 
-        if ((bus_read_reg(REG_CYCLE_L, before, 2u) != 2) ||
+        if ((bus_read_reg(REG_SEQ, &seq_before, 1u) != 1) ||
             !map_read(map) ||
-            (bus_read_reg(REG_CYCLE_L, after, 2u) != 2)) {
-            return false;
+            (bus_read_reg(REG_SEQ, &seq_after, 1u) != 1)) {
+            sleep_ms(1u);
+            continue;
         }
-        if ((before[0] == after[0]) && (before[1] == after[1])) {
+        if ((seq_before == seq_after) && ((seq_before & 1u) == 0u)) {
             return true;
         }
     } while (absolute_time_diff_us(get_absolute_time(), deadline) > 0);

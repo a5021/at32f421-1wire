@@ -36,6 +36,7 @@ void suite_bus(void);
 void suite_map(void);
 void suite_ow(void);
 void suite_stress(void);
+void stress_run(uint32_t count);
 
 static lineedit_t editor;
 
@@ -652,7 +653,7 @@ static void cmd_adc(void)
 static const char *const seed_commands[] = {
     "bootsel", "adc", "watch temp", "bench", "sample", "dump", "roms",
     "eeprom", "scratch 0", "select 0", "cmd 1", "reg 0x00", "probe 0x42",
-    "scan", "ping", "speed auto", "speed 400", "speed 100", "rescan",
+    "recover", "stress 1000", "scan", "ping", "speed auto", "speed 400", "speed 100", "rescan",
     "info", "results", "run soak 60", "run full", "run quick", "help",
     "?", "temp"
 };
@@ -706,9 +707,11 @@ static const cmd_desc_t command_table[] = {
     { "cmd", "cmd <n>", "write REG_CMD" },
     { "select", "select <n>", "write REG_SELECTED" },
     { "probe", "probe <addr>", "probe one I2C address" },
+    { "recover", "recover", "nine clocks and STOP on the I2C bus" },
     { "sample", "sample [bytes]", "measure SCL with PIO" },
     { "bench", "bench", "100 vs 400 kHz read time" },
     { "watch", "watch temp|status|cycle", "1 Hz display until a key" },
+    { "stress", "stress [n]", "n map reads at the current link speed" },
     { "adc", "adc", "VSYS and chip temperature" },
     { "clear", "clear", "clear the terminal" },
     { "history", "history [clear]", "show or reset command history" },
@@ -862,6 +865,11 @@ static void handle_line(char *line)
         cmd_probe(arg);
         return;
     }
+    if (strcmp(cmd, "recover") == 0) {
+        bus_recover();
+        printf("bus recovery done\n");
+        return;
+    }
     if (strcmp(cmd, "sample") == 0) {
         cmd_sample(arg);
         return;
@@ -890,6 +898,13 @@ static void handle_line(char *line)
     }
     if (strcmp(cmd, "watch") == 0) {
         cmd_watch(arg);
+        return;
+    }
+    if (strcmp(cmd, "stress") == 0) {
+        uint32_t count = (arg[0] != '\0') ? (uint32_t)strtoul(arg, NULL, 0)
+                                          : 1000u;
+
+        stress_run(count == 0u ? 1000u : count);
         return;
     }
     if (strcmp(cmd, "adc") == 0) {

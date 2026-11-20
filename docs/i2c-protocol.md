@@ -28,6 +28,9 @@ The master first writes the register pointer (a write transaction with no
 data, or a combined write-then-read), then reads with address+R. The bridge
 returns the register value at the pointer, auto-incrementing on each byte.
 
+Use `REG_SEQ` (`0x08`) as a seqlock around a multi-byte read: read it
+before and after the map, retry if it changed or is odd.
+
 ### Commands (`REG_CMD`)
 
 | Value | Meaning |

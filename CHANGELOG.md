@@ -52,7 +52,14 @@
   not assumed. USB CDC console has a line editor (history, arrows, Home/End,
   Delete, Ctrl-A/E/K/U/W/L), a preloaded command history and diagnostic
   commands (`temp`, `roms`, `scratch`, `eeprom`, `dump`, `reg`, `cmd`,
-  `select`, `probe`, `sample`, `bench`, `watch`, `adc`).
+  `select`, `probe`, `recover`, `stress`, `sample`, `bench`, `watch`, `adc`).
+- **Snapshot seqlock:** `REG_SEQ` (`0x08`) is odd while `publish()` updates
+  the map and even when stable; the tester reads it before and after every
+  map and retries on a change. This removes false failures from publishes
+  that overlap a 256-byte transfer.
+- **Bus recovery:** the tester clocks nine pulses and sends a STOP after an
+  I2C timeout, releasing a slave that holds SDA low. The bridge skips
+  manager work while an I2C transaction is active.
 - Host test `tests/test_manager.c` for the manager command path
   (332 checks total, 0 failures).
 

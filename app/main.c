@@ -33,9 +33,19 @@ static uint32_t first_byte;
 static int      pending_speed = -1;
 static uint8_t  pending_cmd;
 
+volatile uint32_t g_i2c_err_ack;
+volatile uint32_t g_i2c_err_bus;
+volatile uint32_t g_i2c_err_arl;
+volatile uint32_t g_i2c_err_ouf;
+
 bool manager_i2c_busy(void)
 {
     return (I2C2->sts2 & 0x00000002u) != 0u;
+}
+
+static bool i2c_active(void)
+{
+    return (tx_mode != 0u) || (rx_mode != 0u) || manager_i2c_busy();
 }
 
 /* Program the slave clocking from the APB1 frequency that is actually running.
@@ -183,16 +193,20 @@ static void i2c_poll(void)
     }
 
     if ((sts1 & STS1_ACKFAIL) != 0u) {
+        g_i2c_err_ack++;
         I2C2->sts1 = (uint32_t)~(STS1_ACKFAIL & 0x0000DF00u);
         tx_mode = 0;
     }
     if ((sts1 & STS1_BUSERR) != 0u) {
+        g_i2c_err_bus++;
         I2C2->sts1 = (uint32_t)~(STS1_BUSERR & 0x0000DF00u);
     }
     if ((sts1 & STS1_ARLOST) != 0u) {
+        g_i2c_err_arl++;
         I2C2->sts1 = (uint32_t)~(STS1_ARLOST & 0x0000DF00u);
     }
     if ((sts1 & STS1_OUF) != 0u) {
+        g_i2c_err_ouf++;
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
     }
     /* An aborted transfer must not leave a command or a speed change armed
@@ -216,7 +230,9 @@ int main(void)
 
     for (;;) {
         i2c_poll();
-        manager_poll();
+        if (!i2c_active()) {
+            manager_poll();
+        }
     }
 }
 

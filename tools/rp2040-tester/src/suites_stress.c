@@ -1,6 +1,7 @@
 #include "tests.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "crc8.h"
@@ -9,6 +10,11 @@
 #include "regmap.h"
 
 static uint32_t rng_state = 0x12345678u;
+static char     g_last_why[80];
+static char     g_val_why[80];
+static char     g_last_rom[40];
+static uint32_t g_transport;
+static uint32_t g_validate;
 
 static uint32_t rnd(void)
 {
@@ -25,13 +31,15 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
                             uint32_t *max_us)
 {
     uint8_t map[256];
-    uint8_t c1[2];
-    uint8_t c2[2];
+    uint8_t s1;
+    uint8_t s2;
     absolute_time_t t0 = get_absolute_time();
 
-    if ((bus_read_reg(REG_CYCLE_L, c1, 2u) != 2) ||
+    if ((bus_read_reg(REG_SEQ, &s1, 1u) != 1) ||
         !map_read(map) ||
-        (bus_read_reg(REG_CYCLE_L, c2, 2u) != 2)) {
+        (bus_read_reg(REG_SEQ, &s2, 1u) != 1)) {
+        snprintf(g_last_why, sizeof(g_last_why), "i2c");
+        g_transport++;
         (*invalid)++;
         return -1;
     }
@@ -42,7 +50,7 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
         *max_us = (uint32_t)us;
     }
 
-    if ((c1[0] != c2[0]) || (c1[1] != c2[1])) {
+    if ((s1 != s2) || ((s1 & 1u) != 0u)) {
         (*torn)++;
         return 1;
     }
@@ -50,10 +58,83 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
     char why[80];
 
     if (!map_validate(map, why, sizeof(why))) {
+        uint8_t map2[256];
+
+        strncpy(g_last_why, why, sizeof(g_last_why) - 1u);
+        g_last_why[sizeof(g_last_why) - 1u] = '\0';
+        strncpy(g_val_why, why, sizeof(g_val_why) - 1u);
+        g_val_why[sizeof(g_val_why) - 1u] = '\0';
+        if (map_read(map2)) {
+            for (int i = 0; i < 256; i++) {
+                if (map[i] != map2[i]) {
+                    char tmp[40];
+
+                    snprintf(tmp, sizeof(tmp), " diff %02X %02X/%02X",
+                             i, map[i], map2[i]);
+                    strncat(g_val_why, tmp,
+                            sizeof(g_val_why) - strlen(g_val_why) - 1u);
+                    break;
+                }
+            }
+        }
+        int slot = 0;
+
+        if (strncmp(why, "rom ", 4u) == 0) {
+            slot = atoi(&why[4]);
+        }
+        if ((slot < 0) || (slot >= (int)DEV_MAX)) {
+            slot = 0;
+        }
+        snprintf(g_last_rom, sizeof(g_last_rom),
+                 "%02X %02X %02X %02X %02X %02X %02X %02X",
+                 map[REG_ROMS + 8 * slot + 0], map[REG_ROMS + 8 * slot + 1],
+                 map[REG_ROMS + 8 * slot + 2], map[REG_ROMS + 8 * slot + 3],
+                 map[REG_ROMS + 8 * slot + 4], map[REG_ROMS + 8 * slot + 5],
+                 map[REG_ROMS + 8 * slot + 6], map[REG_ROMS + 8 * slot + 7]);
+        g_validate++;
         (*invalid)++;
         return -1;
     }
     return 0;
+}
+
+void stress_run(uint32_t count)
+{
+    uint32_t torn = 0u;
+    uint32_t invalid = 0u;
+    uint32_t max_us = 0u;
+    uint32_t good = 0u;
+    uint32_t errors = 0u;
+
+    g_abort = false;
+    bus_stats_reset();
+    g_transport = 0u;
+    g_validate = 0u;
+    g_last_why[0] = '\0';
+    g_val_why[0] = '\0';
+    g_last_rom[0] = '\0';
+
+    for (uint32_t i = 0u; i < count; i++) {
+        int r = read_map_checked(&torn, &invalid, &max_us);
+
+        if (r < 0) {
+            errors++;
+        } else if (r == 0) {
+            good++;
+        }
+        if ((i % 128u) == 0u) {
+            service();
+            if (g_abort) {
+                break;
+            }
+        }
+    }
+    printf("stress %u: %u good, %u torn, %u invalid, %u errors, max %u us\n",
+           count, good, torn, invalid, errors, max_us);
+    printf("errors: %u timeout, %u nack, %u other; transport %u, validate %u, last: %s, val: %s [%s]\n",
+           (unsigned)bus_err_timeout, (unsigned)bus_err_nack,
+           (unsigned)bus_err_other, (unsigned)g_transport,
+           (unsigned)g_validate, g_last_why, g_val_why, g_last_rom);
 }
 
 void suite_stress(void)
@@ -61,10 +142,6 @@ void suite_stress(void)
     uint8_t map[256];
     uint8_t alt[256];
     char why[80];
-
-    bus_set_speed(BUS_SPEED_400K);
-    write_speed(1u);
-    sleep_ms(50u);
 
     t_start("T35", "10k map reads");
     {

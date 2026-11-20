@@ -67,6 +67,8 @@ reg <addr>       read one register
 cmd <n>          write REG_CMD
 select <n>       write REG_SELECTED
 probe <addr>     probe one I2C address
+recover          nine clocks and STOP on the I2C bus
+stress [n]       n map reads at the current link speed, with error counters
 sample [bytes]   measure SCL with PIO (kHz, min/med/max, stretch)
 bench            100 vs 400 kHz on a 64-byte read
 watch temp|status|cycle   1 Hz display, any key stops

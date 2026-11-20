@@ -19,6 +19,7 @@ extern "C" {
 #define REG_ERROR               0x05u
 #define REG_CYCLE_L             0x06u
 #define REG_CYCLE_H             0x07u
+#define REG_SEQ                 0x08u
 #define REG_SPEED               0x0Fu
 #define REG_TEMP                0x10u
 #define REG_TEMP_STATUS         0x30u

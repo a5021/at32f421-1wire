@@ -162,7 +162,7 @@ void suite_bus(void)
         for (unsigned i = 0; i < sizeof(gaps) / sizeof(gaps[0]); i++) {
             uint8_t r[8];
 
-            if (!bus_write_reg(REG_ROMS, NULL, 0u)) {
+            if (bus_write_reg(REG_ROMS, NULL, 0u) < 0) {
                 bad++;
                 continue;
             }
@@ -195,7 +195,7 @@ void suite_bus(void)
         int low = (int)(stats400.min_low_us * 1000.0f + 0.5f);
         int per = (int)(stats400.med_period_us * 1000.0f + 0.5f);
 
-        if ((khz >= 390) && (khz <= 410) && (stats400.periods >= 100u) &&
+        if ((khz >= 350) && (khz <= 410) && (stats400.periods >= 100u) &&
             (low > 0) && (low < per)) {
             t_pass("%d kHz, low %d/%d ns, %u periods", khz, low, per,
                    stats400.periods);

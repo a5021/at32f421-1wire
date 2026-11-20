@@ -191,14 +191,14 @@ void suite_map(void)
     int good = 0;
 
     for (int i = 0; i < 400; i++) {
-        uint8_t c1[2];
-        uint8_t c2[2];
+        uint8_t s1;
+        uint8_t s2;
 
-        if ((bus_read_reg(REG_CYCLE_L, c1, 2u) != 2) ||
+        if ((bus_read_reg(REG_SEQ, &s1, 1u) != 1) ||
             !map_read(alt) ||
-            (bus_read_reg(REG_CYCLE_L, c2, 2u) != 2)) {
+            (bus_read_reg(REG_SEQ, &s2, 1u) != 1)) {
             invalid++;
-        } else if ((c1[0] != c2[0]) || (c1[1] != c2[1])) {
+        } else if ((s1 != s2) || ((s1 & 1u) != 0u)) {
             torn++;
         } else if (!map_validate(alt, why, sizeof(why))) {
             invalid++;
@@ -213,8 +213,7 @@ void suite_map(void)
         }
     }
     if ((invalid == 0) && (good >= 300)) {
-        t_pass("%d stable, %d torn", good, torn);
-    } else {
+        t_pass("%d stable, %d torn", good, torn);    } else {
         t_fail("%d stable, %d torn, %d invalid", good, torn, invalid);
     }
 

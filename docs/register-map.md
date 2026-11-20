@@ -16,6 +16,7 @@ Canonical description of the I2C slave register file exposed by
 | `0x04` | 1 | `REG_DS18B20` | DS18B20 count (may exceed 16) |
 | `0x05` | 1 | `REG_ERROR` | Last error code |
 | `0x06` | 2 | `REG_CYCLE` | Cycle counter, little-endian |
+| `0x08` | 1 | `REG_SEQ` | Publish seqlock: odd while updating, even when stable |
 | `0x0F` | 1 | `REG_SPEED` | `0` = 100 kHz, `1` = 400 kHz (writable) |
 | `0x10..0x2F` | 32 | `REG_TEMP` | 16 × `int16` raw temperature (1/16 °C), `0x8000` = invalid |
 | `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
@@ -45,6 +46,13 @@ still reports the total.
 | Slot | Temperature (`0x10 + 2i`) | Status (`0x30 + i`) | ROM (`0x80 + 8i`) |
 |------|---------------------------|---------------------|-------------------|
 | unused | `0x8000` (invalid) | `0xFF` | all `0xFF` |
+
+## Snapshot consistency
+
+`REG_SEQ` is a one-byte seqlock. `publish()` writes an odd value, updates
+the snapshot, then writes the next even value. A master should read
+`REG_SEQ`, read the map, read `REG_SEQ` again, and retry if the two differ
+or the value is odd. This detects a publish that overlaps the transfer.
 
 ## Writable registers
 

@@ -10,7 +10,7 @@
 
 /* Hand-assembled `in pins, 1` plus autopush.  Writing the encoding here keeps
  * the build independent of the pioasm host tool. */
-static const uint16_t scl_sampler_instructions[] = { 0x4000u };
+static const uint16_t scl_sampler_instructions[] = { 0x4001u };
 static const pio_program_t scl_sampler_program = {
     .instructions = scl_sampler_instructions,
     .length = 1,

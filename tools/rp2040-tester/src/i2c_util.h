@@ -36,6 +36,11 @@ bool     send_cmd(uint8_t cmd);
 bool     select_sensor(uint8_t index);
 bool     read_scratch(uint8_t *dst9);
 
+extern volatile uint32_t bus_err_timeout;
+extern volatile uint32_t bus_err_nack;
+extern volatile uint32_t bus_err_other;
+void     bus_stats_reset(void);
+
 /* Release a bus left in the middle of a repeated-start sequence. */
 void     bus_recover(void);
 
