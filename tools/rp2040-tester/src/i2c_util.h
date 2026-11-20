@@ -10,7 +10,10 @@
 #define BUS_TIMEOUT_US      100000u
 #define BUS_PROBE_US        5000u
 #define BUS_SPEED_100K      100000u
-#define BUS_SPEED_400K      400000u
+/* The RP2040 DW_apb_i2c adds about 27 SCL cycles of overhead per period.
+ * Requesting 440 kHz puts the measured SCL at 400 kHz. */
+#define BUS_SPEED_FAST      440000u
+#define BUS_SPEED_400K      BUS_SPEED_FAST
 
 void     bus_init(void);
 void     bus_set_speed(uint32_t hz);

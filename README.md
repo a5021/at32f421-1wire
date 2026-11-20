@@ -109,6 +109,8 @@ python tools/onewire_demo.py --rescan --speed 400
 
 The CH341A bridge itself generates about 100 kHz; `--speed 400` changes the
 slave timing, but a 400 kHz master is needed to verify 400 kHz on the wire.
+The Pico tester requests 440 kHz to compensate for the DW_apb_i2c overhead
+and measures 400 kHz on SCL.
 
 Only `REG_SPEED`, `REG_CMD` and `REG_SELECTED` are writable; writes to any
 other register are ignored. The command is queued while the manager is busy.

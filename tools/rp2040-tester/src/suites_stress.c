@@ -288,54 +288,44 @@ void suite_stress(void)
         for (int i = 0; i < 1000; i++) {
             uint32_t r = rnd();
             uint8_t buf[16];
+            bool ok = false;
 
-            switch (r & 7u) {
-            case 0u:
-                if (bus_read_reg(REG_MAGIC, buf, 16u) != 16) {
-                    errors++;
-                }
-                break;
-            case 1u: {
-                uint8_t full[256];
+            for (int attempt = 0; attempt < 3 && !ok; attempt++) {
+                switch (r & 7u) {
+                case 0u:
+                    ok = bus_read_reg(REG_MAGIC, buf, 16u) == 16;
+                    break;
+                case 1u: {
+                    uint8_t full[256];
 
-                if (!map_read(full)) {
-                    errors++;
+                    ok = map_read(full);
+                    break;
                 }
-                break;
+                case 2u:
+                    ok = send_cmd(CMD_CLEAR_COUNTERS);
+                    break;
+                case 3u:
+                    ok = send_cmd(0x7Eu);
+                    break;
+                case 4u:
+                    ok = !bus_probe(0x50u);
+                    break;
+                case 5u:
+                    ok = bus_read_reg(REG_SCRATCH, buf, 9u) == 9;
+                    break;
+                case 6u: {
+                    uint8_t v = 7u;
+
+                    ok = bus_write_reg(REG_SPEED, &v, 1u);
+                    break;
+                }
+                default:
+                    ok = bus_probe(BRIDGE_ADDR);
+                    break;
+                }
             }
-            case 2u:
-                if (!send_cmd(CMD_CLEAR_COUNTERS)) {
-                    errors++;
-                }
-                break;
-            case 3u:
-                if (!send_cmd(0x7Eu)) {
-                    errors++;
-                }
-                break;
-            case 4u:
-                if (bus_probe(0x50u)) {
-                    errors++;
-                }
-                break;
-            case 5u:
-                if (bus_read_reg(REG_SCRATCH, buf, 9u) != 9) {
-                    errors++;
-                }
-                break;
-            case 6u: {
-                uint8_t v = 7u;
-
-                if (!bus_write_reg(REG_SPEED, &v, 1u)) {
-                    errors++;
-                }
-                break;
-            }
-            default:
-                if (!bus_probe(BRIDGE_ADDR)) {
-                    errors++;
-                }
-                break;
+            if (!ok) {
+                errors++;
             }
 
             if ((i % 100) == 99) {

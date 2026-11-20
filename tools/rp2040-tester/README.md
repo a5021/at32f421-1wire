@@ -56,7 +56,7 @@ info             tester version, SDK, clocks, pins, sampler rate
 status           uptime, link speed, target, last run, snapshot summary
 ping             probe 0x42 only
 scan             probe every address 0x08..0x77
-speed 100|400|auto   set the link and the slave timing
+speed 100|400|auto   set the link; "400" requests 440 kHz, which measures 400 kHz
 rescan           queue a 1-Wire ROM search
 temp [n]         temperatures in C, all or one sensor
 roms             ROM table with family and CRC-8

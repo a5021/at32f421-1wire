@@ -215,8 +215,12 @@ static void print_status(void)
     uint32_t up_s = (uint32_t)(to_ms_since_boot(get_absolute_time()) / 1000u);
     bool ack = bus_probe(BRIDGE_ADDR);
 
-    printf("uptime %u s, link %u kHz\n", up_s,
-           (unsigned)(bus_speed() / 1000u));
+    uint32_t link = bus_speed();
+
+    if (link == BUS_SPEED_FAST) {
+        link = 400000u;
+    }
+    printf("uptime %u s, link %u kHz\n", up_s, (unsigned)(link / 1000u));
     printf("target 0x%02X: %s\n", BRIDGE_ADDR, ack ? "ack" : "nack");
 
     if (g_result_count != 0) {
@@ -879,20 +883,22 @@ static void handle_line(char *line)
         return;
     }
     if (strcmp(cmd, "speed") == 0) {
-        if (strcmp(arg, "100") == 0) {
+        int khz = atoi(arg);
+
+        if ((khz >= 50) && (khz <= 1000)) {
+            uint8_t slave = (khz > 100) ? 1u : 0u;
+            uint32_t request = (khz == 400) ? BUS_SPEED_FAST
+                                            : (uint32_t)khz * 1000u;
+
             bus_set_speed(BUS_SPEED_100K);
-            write_speed(0u);
-            printf("link %u kHz\n", (unsigned)(bus_speed() / 1000u));
-        } else if (strcmp(arg, "400") == 0) {
-            bus_set_speed(BUS_SPEED_100K);
-            write_speed(1u);
+            write_speed(slave);
             sleep_ms(30u);
-            bus_set_speed(BUS_SPEED_400K);
-            printf("link %u kHz\n", (unsigned)(bus_speed() / 1000u));
+            bus_set_speed(request);
+            printf("link %d kHz\n", (khz == 400) ? 400 : khz);
         } else if (strcmp(arg, "auto") == 0) {
             cmd_speed_auto();
         } else {
-            printf("usage: speed 100 | 400 | auto\n");
+            printf("usage: speed 50..1000 | auto\n");
         }
         return;
     }
