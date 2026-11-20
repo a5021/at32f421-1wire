@@ -93,20 +93,43 @@ static void load_line(lineedit_t *le, const char *text)
     lineedit_redraw(le);
 }
 
+static void move_left(int n)
+{
+    if (n > 0) {
+        out("\x1b[%dD", n);
+    }
+}
+
+static void move_right(int n)
+{
+    if (n > 0) {
+        out("\x1b[%dC", n);
+    }
+}
+
 static void insert_char(lineedit_t *le, char c)
 {
     if (le->len >= LINEEDIT_MAX - 1) {
         return;
     }
-    if (le->pos < le->len) {
-        memmove(&le->buf[le->pos + 1], &le->buf[le->pos],
-                (size_t)(le->len - le->pos));
+
+    int old = le->pos;
+
+    if (old < le->len) {
+        memmove(&le->buf[old + 1], &le->buf[old], (size_t)(le->len - old));
     }
-    le->buf[le->pos] = c;
+    le->buf[old] = c;
     le->len++;
     le->pos++;
     le->buf[le->len] = '\0';
-    lineedit_redraw(le);
+
+    out("%c", c);
+    if (old < le->len - 1) {
+        int tail = le->len - (old + 1);
+
+        out("%.*s", tail, &le->buf[old + 1]);
+        move_left(tail);
+    }
 }
 
 static void backspace(lineedit_t *le)
@@ -114,14 +137,29 @@ static void backspace(lineedit_t *le)
     if (le->pos == 0) {
         return;
     }
-    if (le->pos < le->len) {
-        memmove(&le->buf[le->pos - 1], &le->buf[le->pos],
-                (size_t)(le->len - le->pos));
+
+    if (le->pos == le->len) {
+        le->pos--;
+        le->len--;
+        le->buf[le->len] = '\0';
+        out("\b \b");
+        return;
     }
+
+    memmove(&le->buf[le->pos - 1], &le->buf[le->pos],
+            (size_t)(le->len - le->pos));
     le->pos--;
     le->len--;
     le->buf[le->len] = '\0';
-    lineedit_redraw(le);
+
+    int tail = le->len - le->pos;
+
+    out("\b");
+    if (tail > 0) {
+        out("%.*s", tail, &le->buf[le->pos]);
+    }
+    out(" ");
+    move_left(tail + 1);
 }
 
 static void delete_char(lineedit_t *le)
@@ -129,11 +167,19 @@ static void delete_char(lineedit_t *le)
     if (le->pos >= le->len) {
         return;
     }
+
     memmove(&le->buf[le->pos], &le->buf[le->pos + 1],
             (size_t)(le->len - le->pos - 1));
     le->len--;
     le->buf[le->len] = '\0';
-    lineedit_redraw(le);
+
+    int tail = le->len - le->pos;
+
+    if (tail > 0) {
+        out("%.*s", tail, &le->buf[le->pos]);
+    }
+    out(" ");
+    move_left(tail + 1);
 }
 
 static void kill_to_end(lineedit_t *le)
@@ -218,22 +264,22 @@ static void apply_final(lineedit_t *le, int c)
     case 'C':
         if (le->pos < le->len) {
             le->pos++;
-            lineedit_redraw(le);
+            move_right(1);
         }
         break;
     case 'D':
         if (le->pos > 0) {
             le->pos--;
-            lineedit_redraw(le);
+            move_left(1);
         }
         break;
     case 'H':
+        move_left(le->pos);
         le->pos = 0;
-        lineedit_redraw(le);
         break;
     case 'F':
+        move_right(le->len - le->pos);
         le->pos = le->len;
-        lineedit_redraw(le);
         break;
     default:
         break;
@@ -244,23 +290,17 @@ static void apply_tilde(lineedit_t *le, int param)
 {
     switch (param) {
     case 1:
+    case 7:
+        move_left(le->pos);
         le->pos = 0;
-        lineedit_redraw(le);
         break;
     case 3:
         delete_char(le);
         break;
     case 4:
-        le->pos = le->len;
-        lineedit_redraw(le);
-        break;
-    case 7:
-        le->pos = 0;
-        lineedit_redraw(le);
-        break;
     case 8:
+        move_right(le->len - le->pos);
         le->pos = le->len;
-        lineedit_redraw(le);
         break;
     default:
         break;
@@ -346,13 +386,13 @@ const char *lineedit_feed(lineedit_t *le, int c)
         return NULL;
     }
     if (c == 1) {                    /* Ctrl-A */
+        move_left(le->pos);
         le->pos = 0;
-        lineedit_redraw(le);
         return NULL;
     }
     if (c == 5) {                    /* Ctrl-E */
+        move_right(le->len - le->pos);
         le->pos = le->len;
-        lineedit_redraw(le);
         return NULL;
     }
     if (c == 11) {                   /* Ctrl-K */
