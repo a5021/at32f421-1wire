@@ -32,6 +32,16 @@ add_executable(i2c_tester
 
 target_include_directories(i2c_tester PRIVATE src)
 
+if(NOT PICO_BOARD)
+    set(PICO_BOARD pico)
+endif()
+
+target_compile_definitions(i2c_tester PRIVATE
+    TESTER_VERSION="1.0"
+    TESTER_SDK_VERSION="${PICO_SDK_VERSION_STRING}"
+    TESTER_BOARD="${PICO_BOARD}"
+)
+
 target_link_libraries(i2c_tester
     pico_stdlib
     hardware_i2c

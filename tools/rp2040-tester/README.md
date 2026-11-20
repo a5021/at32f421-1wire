@@ -46,12 +46,20 @@ run full         T01-T42, about 3 min
 run soak N       full suite with the T36 soak extended to N seconds
 results          print the last results again
 abort            stop after the current test (also Ctrl-C or 'a' during a run)
-help
+info             tester version, SDK, clocks, pins, sampler rate
+status           uptime, link speed, target, last run, snapshot summary
+ping             probe 0x42 only
+scan             probe every address 0x08..0x77
+speed 100|400    set the link and the slave timing, safely
+rescan           queue a 1-Wire ROM search
+bootsel          reboot the Pico into the UF2 bootloader
+? or help        command list
 ```
 
-The firmware echoes typed characters and supports backspace, so the terminal
-needs no local echo. While a run is active only Ctrl-C and `a` are read: they
-print `[abort requested]` and stop after the current test.
+The prompt is `> `. The firmware echoes typed characters and supports
+backspace, so the terminal needs no local echo. While a run is active only
+Ctrl-C and `a` are read: they print `[abort requested]` and stop after the
+current test.
 
 LED:
 

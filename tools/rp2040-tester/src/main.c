@@ -2,12 +2,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "hardware/clocks.h"
 #include "hardware/gpio.h"
-#include "i2c_util.h"
+#include "pico/bootrom.h"
 #include "pico/stdlib.h"
+
+#include "i2c_util.h"
 #include "regmap.h"
 #include "scl_probe.h"
 #include "tests.h"
+
+#ifndef TESTER_VERSION
+#define TESTER_VERSION "1.0"
+#endif
+#ifndef TESTER_SDK_VERSION
+#define TESTER_SDK_VERSION "unknown"
+#endif
+#ifndef TESTER_BOARD
+#define TESTER_BOARD "pico"
+#endif
 
 #ifndef PICO_DEFAULT_LED_PIN
 #define PICO_DEFAULT_LED_PIN 25
@@ -104,6 +117,91 @@ static void print_results(void)
     }
 }
 
+static int count_failures(void)
+{
+    int fail = 0;
+
+    for (int i = 0; i < g_result_count; i++) {
+        if (!g_results[i].ok) {
+            fail++;
+        }
+    }
+    return fail;
+}
+
+static const char *last_failure(void)
+{
+    for (int i = g_result_count - 1; i >= 0; i--) {
+        if (!g_results[i].ok) {
+            return g_results[i].id;
+        }
+    }
+    return "-";
+}
+
+static void print_info(void)
+{
+    printf("tester %s (sdk %s, board %s)\n", TESTER_VERSION,
+           TESTER_SDK_VERSION, TESTER_BOARD);
+    printf("built %s %s\n", __DATE__, __TIME__);
+    printf("sys %u kHz, peri %u kHz, usb %u kHz\n",
+           (unsigned)(clock_get_hz(clk_sys) / 1000u),
+           (unsigned)(clock_get_hz(clk_peri) / 1000u),
+           (unsigned)(clock_get_hz(clk_usb) / 1000u));
+    printf("i2c0 SDA GP4, SCL GP5, target 0x%02X\n", BRIDGE_ADDR);
+    printf("sampler %u kHz (%u ns per sample)\n",
+           (unsigned)(clock_get_hz(clk_sys) / 2000u),
+           (unsigned)(2000000000u / clock_get_hz(clk_sys)));
+}
+
+static void print_status(void)
+{
+    uint8_t hdr[16];
+    uint32_t up_s = (uint32_t)(to_ms_since_boot(get_absolute_time()) / 1000u);
+    bool ack = bus_probe(BRIDGE_ADDR);
+
+    printf("uptime %u s, link %u kHz\n", up_s,
+           (unsigned)(bus_speed() / 1000u));
+    printf("target 0x%02X: %s\n", BRIDGE_ADDR, ack ? "ack" : "nack");
+
+    if (g_result_count != 0) {
+        printf("last run: %d/%d passed, first fail %s\n",
+               g_result_count - count_failures(), g_result_count,
+               last_failure());
+    } else {
+        printf("last run: none\n");
+    }
+
+    if (ack && (bus_read_reg(REG_MAGIC, hdr, sizeof(hdr)) == (int)sizeof(hdr))) {
+        printf("snapshot: %u devices, %u ds18b20, cycle %u, flags 0x%02X\n",
+               hdr[REG_DEVICES], hdr[REG_DS18B20],
+               (unsigned)(hdr[REG_CYCLE_L] | (hdr[REG_CYCLE_H] << 8)),
+               hdr[REG_FLAGS]);
+    } else {
+        printf("snapshot: unavailable\n");
+    }
+}
+
+static void print_scan(void)
+{
+    int found = 0;
+
+    printf("i2c scan 0x08..0x77:");
+    for (uint8_t addr = 0x08u; addr <= 0x77u; addr++) {
+        if (bus_probe(addr)) {
+            printf(" %02X", addr);
+            found++;
+        }
+        if ((addr & 0x0Fu) == 0x0Fu) {
+            service();
+        }
+    }
+    if (found == 0) {
+        printf(" none");
+    }
+    printf(" (%d)\n", found);
+}
+
 static int run_all(bool stress)
 {
     tests_reset();
@@ -148,8 +246,57 @@ static int run_all(bool stress)
 
 static void handle_line(char *line)
 {
-    if (strcmp(line, "help") == 0) {
+    if ((strcmp(line, "help") == 0) || (strcmp(line, "?") == 0)) {
         printf("run quick | run full | run soak N | results | abort\n");
+        printf("info | status | ping | scan | speed 100|400 | rescan | bootsel\n");
+        return;
+    }
+    if (strcmp(line, "info") == 0) {
+        print_info();
+        return;
+    }
+    if (strcmp(line, "status") == 0) {
+        print_status();
+        return;
+    }
+    if (strcmp(line, "ping") == 0) {
+        printf("0x%02X: %s\n", BRIDGE_ADDR,
+               bus_probe(BRIDGE_ADDR) ? "ack" : "nack");
+        return;
+    }
+    if (strcmp(line, "scan") == 0) {
+        print_scan();
+        return;
+    }
+    if (strcmp(line, "rescan") == 0) {
+        if (send_cmd(CMD_RESCAN)) {
+            printf("rescan queued\n");
+        } else {
+            printf("rescan failed\n");
+        }
+        return;
+    }
+    if (strncmp(line, "speed ", 6) == 0) {
+        int khz = atoi(&line[6]);
+        uint8_t readback = 0xEEu;
+
+        if (khz == 100) {
+            bus_set_speed(BUS_SPEED_100K);
+            write_speed(0u);
+            bus_read_reg(REG_SPEED, &readback, 1u);
+            printf("link %u kHz, slave %u\n",
+                   (unsigned)(bus_speed() / 1000u), readback);
+        } else if (khz == 400) {
+            bus_set_speed(BUS_SPEED_100K);
+            write_speed(1u);
+            sleep_ms(30u);
+            bus_set_speed(BUS_SPEED_400K);
+            bus_read_reg(REG_SPEED, &readback, 1u);
+            printf("link %u kHz, slave %u\n",
+                   (unsigned)(bus_speed() / 1000u), readback);
+        } else {
+            printf("usage: speed 100 | speed 400\n");
+        }
         return;
     }
     if (strcmp(line, "run quick") == 0) {
@@ -177,10 +324,17 @@ static void handle_line(char *line)
     }
     if (strcmp(line, "abort") == 0) {
         g_abort = true;
+        printf("abort requested\n");
+        return;
+    }
+    if (strcmp(line, "bootsel") == 0) {
+        printf("rebooting to BOOTSEL\n");
+        sleep_ms(50u);
+        reset_usb_boot(0, 0);
         return;
     }
     if (line[0] != '\0') {
-        printf("unknown command: %s (try help)\n", line);
+        printf("unknown command: %s (try ?)\n", line);
     }
 }
 
@@ -213,7 +367,8 @@ int main(void)
         run_all(true);
     }
 
-    printf("ready: run quick | run full | run soak N | results | abort\n");
+    printf("ready: ? for commands\n");
+    printf("> ");
 
     for (;;) {
         int c;
@@ -225,6 +380,7 @@ int main(void)
                 line[line_len] = '\0';
                 handle_line(line);
                 line_len = 0;
+                printf("> ");
             } else if ((c == 8) || (c == 127)) {
                 if (line_len > 0) {
                     line_len--;
