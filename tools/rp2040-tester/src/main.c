@@ -66,6 +66,9 @@ void service(void)
     led_poll();
     while ((c = getchar_timeout_us(0)) >= 0) {
         if ((c == 3) || (c == 'a') || (c == 'A')) {
+            if (!g_abort) {
+                printf("\n[abort requested]\n");
+            }
             g_abort = true;
         }
     }
@@ -218,11 +221,19 @@ int main(void)
         led_poll();
         while ((c = getchar_timeout_us(0)) >= 0) {
             if ((c == '\r') || (c == '\n')) {
+                printf("\n");
                 line[line_len] = '\0';
                 handle_line(line);
                 line_len = 0;
-            } else if (line_len < (int)sizeof(line) - 1) {
+            } else if ((c == 8) || (c == 127)) {
+                if (line_len > 0) {
+                    line_len--;
+                    printf("\b \b");
+                }
+            } else if ((c >= 32) && (c < 127) &&
+                       (line_len < (int)sizeof(line) - 1)) {
                 line[line_len++] = (char)c;
+                putchar(c);
             }
         }
         tight_loop_contents();

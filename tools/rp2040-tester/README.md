@@ -45,9 +45,13 @@ run quick        T01-T34, about 40 s
 run full         T01-T42, about 3 min
 run soak N       full suite with the T36 soak extended to N seconds
 results          print the last results again
-abort            stop after the current test (also any 'a' during a run)
+abort            stop after the current test (also Ctrl-C or 'a' during a run)
 help
 ```
+
+The firmware echoes typed characters and supports backspace, so the terminal
+needs no local echo. While a run is active only Ctrl-C and `a` are read: they
+print `[abort requested]` and stop after the current test.
 
 LED:
 
