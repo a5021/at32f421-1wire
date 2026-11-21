@@ -550,6 +550,9 @@ bool bus_bb_corrupt_addr(uint8_t addr7, int flip_bit)
         addr ^= (uint8_t)(1u << flip_bit);
     }
 
+    /* A slave left mid-byte after an earlier truncation can hold SDA low and
+     * make the next ACK slot look acknowledged.  Release the bus first. */
+    bus_recover();
     bb_begin();
     bus_txn++;                      /* an address phase was attempted */
     bb_start();
@@ -562,6 +565,7 @@ bool bus_bb_corrupt_addr(uint8_t addr7, int flip_bit)
 
 bool bus_bb_truncate(uint8_t addr7, uint8_t reg, int data_bits)
 {
+    bus_recover();
     bb_begin();
     bus_txn++;
     bb_start();
