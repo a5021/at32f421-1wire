@@ -24,7 +24,7 @@ void suite_map(void)
 
     t_start("T12", "magic + version");
     if (map_stable(map, 3000u) &&
-        (map[REG_MAGIC] == 0x5Au) && (map[REG_VERSION] == 1u)) {
+        (map[REG_MAGIC] == 0x5Au) && (map[REG_VERSION] == 2u)) {
         t_pass("0x5A v1");
     } else {
         t_fail("bad header");
@@ -321,25 +321,27 @@ void suite_map(void)
 
     t_start("T43", "health frames");
     {
-        uint8_t raw[2];
-        uint16_t f1 = 0xFFFFu;
-        uint16_t f2 = 0xFFFFu;
+        uint8_t raw[4];
+        uint32_t f1 = 0xFFFFFFFFu;
+        uint32_t f2 = 0xFFFFFFFFu;
         bool ok = false;
 
-        if (bus_read_reg(REG_FRAMES_L, raw, 2u) == 2) {
-            f1 = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+        if (bus_read_reg(REG_FRAMES, raw, 4u) == 4) {
+            f1 = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) |
+                 ((uint32_t)raw[2] << 16) | ((uint32_t)raw[3] << 24);
             for (int i = 0; i < 16; i++) {
                 uint8_t v;
 
                 (void)bus_read_reg(REG_MAGIC, &v, 1u);
             }
-            if (bus_read_reg(REG_FRAMES_L, raw, 2u) == 2) {
-                f2 = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+            if (bus_read_reg(REG_FRAMES, raw, 4u) == 4) {
+                f2 = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) |
+                     ((uint32_t)raw[2] << 16) | ((uint32_t)raw[3] << 24);
                 ok = true;
             }
         }
 
-        uint16_t delta = (uint16_t)(f2 - f1);
+        uint32_t delta = f2 - f1;
 
         /* 16 register reads are 32 address phases; the sampling read that
          * follows adds one more before the counter is fetched. */
@@ -353,17 +355,18 @@ void suite_map(void)
 
     t_start("T44", "health clear");
     {
-        uint8_t raw[3];
+        uint8_t raw[5];
         bool ok = send_cmd(CMD_CLEAR_COUNTERS);
 
         sleep_ms(10u);
-        if (ok && (bus_read_reg(REG_FRAMES_L, raw, 3u) == 3)) {
-            uint16_t frames = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+        if (ok && (bus_read_reg(REG_FRAMES, raw, sizeof(raw)) == (int)sizeof(raw))) {
+            uint32_t frames = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) |
+                              ((uint32_t)raw[2] << 16) | ((uint32_t)raw[3] << 24);
 
-            if ((frames <= 6u) && (raw[2] == 0u)) {
+            if ((frames <= 6u) && (raw[4] == 0u)) {
                 t_pass("frames %u, flags 0", (unsigned)frames);
             } else {
-                t_fail("frames %u, flags 0x%02X", (unsigned)frames, raw[2]);
+                t_fail("frames %u, flags 0x%02X", (unsigned)frames, raw[4]);
             }
         } else {
             t_fail("clear or read failed");

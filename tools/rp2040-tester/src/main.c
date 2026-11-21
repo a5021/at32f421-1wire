@@ -634,9 +634,9 @@ static void cmd_health(const char *arg)
     printf("txn %u, slave frames %u, failures %u (%u.%u%%)\n",
            (unsigned)bus_txn, (unsigned)bus_health_frames, (unsigned)failures,
            (unsigned)(per_mille / 10u), (unsigned)(per_mille % 10u));
-    printf("  missed %u, truncated %u, buserr %u, arlost %u, flags 0x%02X%s%s%s%s%s\n",
+    printf("  missed %u, truncated %u, buserr %u, flags 0x%02X%s%s%s%s%s\n",
            (unsigned)bus_health_missed, (unsigned)bus_health_truncated,
-           bus_health_err_bus, bus_health_err_arl, bus_health_flags,
+           bus_health_err_bus, bus_health_flags,
            (bus_health_flags & HEALTH_BUSERR) ? " buserr" : "",
            (bus_health_flags & HEALTH_ARLOST) ? " arlost" : "",
            (bus_health_flags & HEALTH_OUF) ? " ouf" : "",

@@ -43,11 +43,13 @@ volatile uint32_t g_i2c_err_ouf;
  * The slave cannot see a master NACK: if the address phase is corrupted the
  * address simply does not match and no flag is raised.  What it can count is
  * matched addresses, so the master compares its own transaction count with
- * this counter and the difference is exactly the address-phase loss rate. */
-static uint16_t g_frames;           /* matched addresses, wraps at 64K */
+ * this counter and the difference is exactly the address-phase loss rate.
+ *
+ * The counter only changes at an address match, which happens before the
+ * master reads it, so a four-byte read is consistent without a seqlock. */
+static uint32_t g_frames;           /* matched addresses */
 static uint8_t  g_health;           /* HEALTH_* sticky bits */
 static uint8_t  g_err_bus;          /* saturated BUSERR count */
-static uint8_t  g_err_arl;          /* saturated ARLOST count */
 static uint32_t g_ms;               /* 1 ms tick, polled from SysTick */
 static uint32_t g_scl_hz = 100000u; /* timing currently programmed */
 static uint32_t sda_low_since;
@@ -87,16 +89,18 @@ static void timebase_poll(void)
 static uint8_t reg_byte(uint32_t addr)
 {
     switch (addr & 0xFFu) {
-    case REG_FRAMES_L:
+    case REG_FRAMES + 0u:
         return (uint8_t)(g_frames & 0xFFu);
-    case REG_FRAMES_H:
-        return (uint8_t)(g_frames >> 8);
+    case REG_FRAMES + 1u:
+        return (uint8_t)((g_frames >> 8) & 0xFFu);
+    case REG_FRAMES + 2u:
+        return (uint8_t)((g_frames >> 16) & 0xFFu);
+    case REG_FRAMES + 3u:
+        return (uint8_t)((g_frames >> 24) & 0xFFu);
     case REG_HEALTH:
         return g_health;
     case REG_ERR_BUS:
         return g_err_bus;
-    case REG_ERR_ARL:
-        return g_err_arl;
     default:
         return g_regs[addr & 0xFFu];
     }
@@ -107,7 +111,6 @@ static void health_clear(void)
     g_frames = 0u;
     g_health = 0u;
     g_err_bus = 0u;
-    g_err_arl = 0u;
     g_i2c_err_ack = 0u;
     g_i2c_err_bus = 0u;
     g_i2c_err_arl = 0u;
@@ -369,7 +372,6 @@ static void i2c_poll(void)
     }
     if ((sts1 & STS1_ARLOST) != 0u) {
         g_i2c_err_arl++;
-        g_err_arl = sat_inc(g_err_arl);
         g_health |= HEALTH_ARLOST;
         I2C2->sts1 = (uint32_t)~(STS1_ARLOST & 0x0000DF00u);
     }

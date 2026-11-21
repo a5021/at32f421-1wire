@@ -3,13 +3,15 @@
 ## Unreleased
 
 ### Added
-- **Bridge:** bus-health block at `0x0A..0x0E`: a 16-bit matched-address
+- **Bridge:** bus-health block at `0x09..0x0E`: a 32-bit matched-address
   counter (`REG_FRAMES`), sticky flags (`REG_HEALTH`: BUSERR, ARLOST, OUF,
-  SDA stuck, recovered), and saturating BUSERR/ARLOST counters. The master
+  SDA stuck, recovered), and a saturating BUSERR counter. The master
   compares its own transaction count with `REG_FRAMES`; the difference is the
   address-phase loss rate, which the slave cannot observe any other way
   because a NACK on its address raises no flag. `CMD_CLEAR_COUNTERS` clears
-  the block.
+  the block. The counter is 32 bits and only changes at an address match, so
+  it is read without wrap logic and without a seqlock. `REG_VERSION` is now
+  `0x02`.
 - **Bridge:** self-recovery. If SDA stays low for 10 ms with no matched
   address, the slave disables I2C, clocks nine times and issues a STOP in
   open-drain mode, then re-initialises the peripheral at the same speed and

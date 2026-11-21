@@ -24,9 +24,8 @@ volatile uint32_t bus_health_missed;
 volatile uint32_t bus_health_truncated;
 volatile uint8_t  bus_health_flags;
 volatile uint8_t  bus_health_err_bus;
-volatile uint8_t  bus_health_err_arl;
 
-static uint16_t frames_last;
+static uint32_t frames_last;
 static bool     frames_primed;
 static uint32_t fail_base;
 
@@ -42,31 +41,37 @@ static uint32_t failures_total(void)
     return bus_err_nack + bus_err_timeout + bus_err_other;
 }
 
-/* Read the whole health block in one transaction: frame counter, sticky flags
- * and the two saturating error counters. */
+/* One transaction reads the whole health block: 32-bit frame counter, sticky
+ * flags and the saturating BUSERR count.  The counter only changes at an
+ * address match, so the four bytes cannot tear. */
 static bool health_read(uint8_t *b, size_t len)
 {
-    return bus_read_reg(REG_FRAMES_L, b, len) == (int)len;
+    return bus_read_reg(REG_FRAMES, b, len) == (int)len;
+}
+
+static uint32_t health_u32(const uint8_t *b)
+{
+    return (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+           ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
 }
 
 bool bus_health_sample(void)
 {
-    uint8_t b[5];
+    uint8_t b[6];
 
     if (!health_read(b, sizeof(b))) {
         return false;
     }
 
-    uint16_t now = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+    uint32_t now = health_u32(b);
 
     if (frames_primed) {
-        bus_health_frames += (uint16_t)(now - frames_last);
+        bus_health_frames += now - frames_last;
     }
     frames_last = now;
     frames_primed = true;
-    bus_health_flags = b[2];
-    bus_health_err_bus = b[3];
-    bus_health_err_arl = b[4];
+    bus_health_flags = b[4];
+    bus_health_err_bus = b[5];
 
     uint32_t failures = failures_total() - fail_base;
 
@@ -79,10 +84,10 @@ bool bus_health_sample(void)
 
 void bus_health_reset(void)
 {
-    uint8_t b[5];
+    uint8_t b[6];
 
     if (health_read(b, sizeof(b))) {
-        frames_last = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+        frames_last = health_u32(b);
         frames_primed = true;
     } else {
         frames_primed = false;
@@ -94,7 +99,6 @@ void bus_health_reset(void)
     bus_health_truncated = 0u;
     bus_health_flags = 0u;
     bus_health_err_bus = 0u;
-    bus_health_err_arl = 0u;
     fail_base = failures_total();
 }
 

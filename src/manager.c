@@ -78,7 +78,7 @@ void manager_init(void)
 {
     memset((void *)g_regs, 0, sizeof(g_regs));
     g_regs[REG_MAGIC] = 0x5Au;
-    g_regs[REG_VERSION] = 0x01u;
+    g_regs[REG_VERSION] = 0x02u;
     ds18b20_init(&sensor, true);
     ds2431_init(&eeprom);
     clear_results();
@@ -119,7 +119,7 @@ static void publish(void)
     g_regs[REG_SEQ] = ++pub_seq;        /* odd: update in progress */
     cycle++;
     g_regs[REG_MAGIC] = 0x5Au;
-    g_regs[REG_VERSION] = 0x01u;
+    g_regs[REG_VERSION] = 0x02u;
     g_regs[REG_FLAGS] = flags;
     g_regs[REG_DEVICES] = (uint8_t)((device_count > 255u) ? 255u : device_count);
     g_regs[REG_DS18B20] = (uint8_t)((ds18b20_count > 255u) ? 255u : ds18b20_count);

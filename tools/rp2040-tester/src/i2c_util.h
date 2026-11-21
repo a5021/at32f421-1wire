@@ -55,7 +55,6 @@ extern volatile uint32_t bus_health_missed;
 extern volatile uint32_t bus_health_truncated;
 extern volatile uint8_t  bus_health_flags;
 extern volatile uint8_t  bus_health_err_bus;
-extern volatile uint8_t  bus_health_err_arl;
 
 bool     bus_health_sample(void);
 void     bus_health_reset(void);

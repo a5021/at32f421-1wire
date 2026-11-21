@@ -15,11 +15,9 @@
 #define REG_CYCLE_L             0x06u
 #define REG_CYCLE_H             0x07u
 #define REG_SEQ                 0x08u
-#define REG_FRAMES_L            0x0Au
-#define REG_FRAMES_H            0x0Bu
-#define REG_HEALTH              0x0Cu
-#define REG_ERR_BUS             0x0Du
-#define REG_ERR_ARL             0x0Eu
+#define REG_FRAMES              0x09u   /* 0x09..0x0C, 32-bit LE */
+#define REG_HEALTH              0x0Du
+#define REG_ERR_BUS             0x0Eu
 #define REG_SPEED               0x0Fu
 #define REG_TEMP                0x10u
 #define REG_TEMP_STATUS         0x30u
