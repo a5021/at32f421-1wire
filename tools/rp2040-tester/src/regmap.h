@@ -28,6 +28,7 @@
 #define REG_FAULT               0x62u
 #define REG_MAP_CRC_L           0x63u
 #define REG_MAP_CRC_H           0x64u
+#define REG_MGR                 0x65u
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 

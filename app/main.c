@@ -108,6 +108,8 @@ static uint8_t reg_byte(uint32_t addr)
         return g_health;
     case REG_ERR_BUS:
         return g_err_bus;
+    case REG_MGR:
+        return manager_state_reg();
     default:
         return g_regs[addr & 0xFFu];
     }

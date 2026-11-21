@@ -39,6 +39,17 @@ static uint32_t g_phase_idle;
 static uint32_t g_phase_unknown;
 static uint32_t g_off_bucket[OFF_BUCKETS];
 static uint32_t g_off_unknown;
+static uint32_t g_mgr[8];       /* retries per manager state */
+static uint32_t g_bit[8];       /* which bit position was corrupted */
+static uint32_t g_step[3];      /* transport: seq-in, map, seq-out */
+
+/* Bytes that legitimately change between two reads. */
+static bool map_volatile_index(int i)
+{
+    return (i == (int)REG_FLAGS) || (i == (int)REG_SEQ) ||
+           ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
+           ((i >= (int)REG_CMD) && (i <= (int)REG_MGR));
+}
 
 static void retry_stats_reset(void)
 {
@@ -48,15 +59,22 @@ static void retry_stats_reset(void)
     g_phase_unknown = 0u;
     g_off_unknown = 0u;
     memset(g_off_bucket, 0, sizeof(g_off_bucket));
+    memset(g_mgr, 0, sizeof(g_mgr));
+    memset(g_bit, 0, sizeof(g_bit));
+    memset(g_step, 0, sizeof(g_step));
     memset(g_ev, 0, sizeof(g_ev));
 }
 
-static void retry_capture(int cls, int attempt, uint32_t us, int off)
+static void retry_capture(int cls, int attempt, uint32_t us, int off,
+                          uint8_t xor_bits, int step)
 {
     uint8_t flags = 0;
     uint8_t raw[2] = { 0, 0 };
+    uint8_t mgr = 0xFF;
     bool got_flags = bus_read_reg(REG_FLAGS, &flags, 1u) == 1;
     uint16_t cycle = 0;
+
+    (void)bus_read_reg(REG_MGR, &mgr, 1u);
 
     if (bus_read_reg(REG_CYCLE_L, raw, 2u) == 2) {
         cycle = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
@@ -68,6 +86,18 @@ static void retry_capture(int cls, int attempt, uint32_t us, int off)
         g_phase_busy++;
     } else {
         g_phase_idle++;
+    }
+
+    if (mgr < 8u) {
+        g_mgr[mgr]++;
+    }
+    if ((step >= 0) && (step < 3)) {
+        g_step[step]++;
+    }
+    for (int b = 0; b < 8; b++) {
+        if ((xor_bits & (1u << b)) != 0u) {
+            g_bit[b]++;
+        }
     }
 
     if ((off >= 0) && (off < 256)) {
@@ -90,10 +120,24 @@ static void retry_capture(int cls, int attempt, uint32_t us, int off)
 
 static void retry_stats_print(void)
 {
+    static const char *const state_name[6] = {
+        "search", "convert", "read", "eeprom", "publish", "wait"
+    };
+
     printf("retry phase: busy %u, idle %u, unknown %u\n",
            (unsigned)g_phase_busy, (unsigned)g_phase_idle,
            (unsigned)g_phase_unknown);
-    printf("retry offsets:");
+    printf("retry manager:");
+    for (int i = 0; i < 6; i++) {
+        printf(" %s %u", state_name[i], (unsigned)g_mgr[i]);
+    }
+    printf("\nretry transport steps: seq-in %u, map %u, seq-out %u\n",
+           (unsigned)g_step[0], (unsigned)g_step[1], (unsigned)g_step[2]);
+    printf("retry bit positions:");
+    for (int i = 0; i < 8; i++) {
+        printf(" b%d %u", i, (unsigned)g_bit[i]);
+    }
+    printf("\nretry offsets:");
     for (int i = 0; i < OFF_BUCKETS; i++) {
         printf(" %u", (unsigned)g_off_bucket[i]);
     }
@@ -126,22 +170,25 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
         uint8_t s1;
         uint8_t s2;
         absolute_time_t t0 = get_absolute_time();
+        int step = 0;
 
-        if ((bus_read_reg(REG_SEQ, &s1, 1u) != 1) ||
-            !map_read(map) ||
-            (bus_read_reg(REG_SEQ, &s2, 1u) != 1)) {
-            snprintf(g_last_why, sizeof(g_last_why), "i2c");
-            g_transport++;
-            g_retries++;
-            {
-                int64_t fail_us = absolute_time_diff_us(t0, get_absolute_time());
-
-                retry_capture(0, attempt, (uint32_t)fail_us, -1);
-            }
-            continue;
+        if (bus_read_reg(REG_SEQ, &s1, 1u) != 1) {
+            step = 1;
+        } else if (!map_read(map)) {
+            step = 2;
+        } else if (bus_read_reg(REG_SEQ, &s2, 1u) != 1) {
+            step = 3;
         }
 
         int64_t us = absolute_time_diff_us(t0, get_absolute_time());
+
+        if (step != 0) {
+            snprintf(g_last_why, sizeof(g_last_why), "i2c:%d", step);
+            g_transport++;
+            g_retries++;
+            retry_capture(0, attempt, (uint32_t)us, -1, 0u, step - 1);
+            continue;
+        }
 
         if ((uint32_t)us > *max_us) {
             *max_us = (uint32_t)us;
@@ -159,29 +206,34 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
         }
 
         /* A stable snapshot that fails validation is a payload bit error.
-         * Re-read to find which byte was corrupted: the slave still holds the
-         * correct value, only the transfer was hit. */
+         * Two consecutive clean reads give a reference; only if they agree is
+         * the difference a real corruption and not a legitimate update. */
         int off = -1;
+        uint8_t xb = 0u;
         {
             uint8_t map2[256];
+            uint8_t map3[256];
 
-            if (map_read(map2)) {
-                for (int i = 0; i < 256; i++) {
-                    /* Skip bytes that legitimately change between two reads
-                     * (health counters, seq, flags, speed, control). */
-                    if ((i == REG_FLAGS) || (i == REG_SEQ) ||
-                        ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
-                        ((i >= (int)REG_CMD) && (i <= (int)REG_MAP_CRC_H))) {
-                        continue;
+            if (map_read(map2) && map_read(map3)) {
+                bool same = true;
+
+                for (int i = 0; (i < 256) && same; i++) {
+                    if (!map_volatile_index(i) && (map2[i] != map3[i])) {
+                        same = false;
                     }
-                    if (map[i] != map2[i]) {
-                        off = i;
-                        break;
+                }
+                if (same) {
+                    for (int i = 0; i < 256; i++) {
+                        if (!map_volatile_index(i) && (map[i] != map2[i])) {
+                            off = i;
+                            xb = (uint8_t)(map[i] ^ map2[i]);
+                            break;
+                        }
                     }
                 }
             }
         }
-        retry_capture(1, attempt, (uint32_t)us, off);
+        retry_capture(1, attempt, (uint32_t)us, off, xb, 0);
 
         strncpy(g_last_why, why, sizeof(g_last_why) - 1u);
         g_last_why[sizeof(g_last_why) - 1u] = '\0';

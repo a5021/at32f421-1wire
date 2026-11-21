@@ -33,6 +33,7 @@ extern "C" {
 #define REG_FAULT               0x62u
 #define REG_MAP_CRC_L           0x63u
 #define REG_MAP_CRC_H           0x64u
+#define REG_MGR                 0x65u
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 
@@ -83,6 +84,9 @@ void manager_poll(void);
 
 /* Called by the I2C bridge when a command is latched at STOP. */
 void manager_command(uint8_t cmd);
+
+/* Manager state, injected into REG_MGR at read time (diagnostics). */
+uint8_t manager_state_reg(void);
 
 /* True while the I2C bridge is mid-transaction; overrides the weak stub
  * in manager.c on the real target. */

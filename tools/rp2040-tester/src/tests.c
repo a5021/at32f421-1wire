@@ -15,7 +15,7 @@ uint16_t map_crc16(const uint8_t *map)
     for (int i = 0; i < 256; i++) {
         if ((i == (int)REG_FLAGS) || (i == (int)REG_SEQ) ||
             ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
-            ((i >= (int)REG_CMD) && (i <= (int)REG_MAP_CRC_H))) {
+            ((i >= (int)REG_CMD) && (i <= (int)REG_MGR))) {
             continue;
         }
         crc ^= (uint16_t)((uint16_t)map[i] << 8);

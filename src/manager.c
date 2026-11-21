@@ -24,6 +24,8 @@ static uint8_t  eeprom_data[8];
 static uint8_t  eeprom_status;
 
 static uint32_t manager_state;
+static uint8_t  pause_requested;
+static uint8_t  paused;
 static uint32_t search_started;
 static uint32_t convert_started;
 static uint32_t read_started;
@@ -56,7 +58,23 @@ static uint32_t rom_count(void)
 /* Called by the I2C bridge when a command is latched at STOP. */
 void manager_command(uint8_t cmd)
 {
+    /* 4 pauses the cycle, 5 resumes it.  Pause only takes effect in MGR_WAIT
+     * so a conversion or an EEPROM read is never cut in half. */
+    if (cmd == 4u) {
+        pause_requested = 1u;
+        return;
+    }
+    if (cmd == 5u) {
+        pause_requested = 0u;
+        paused = 0u;
+        return;
+    }
     g_cmd = cmd;
+}
+
+uint8_t manager_state_reg(void)
+{
+    return (uint8_t)(manager_state | (paused ? 0x80u : 0u));
 }
 
 /* Test helper: force the manager state (tests only). */
@@ -113,7 +131,7 @@ static uint16_t map_crc(void)
     for (uint32_t i = 0u; i < 256u; i++) {
         if ((i == REG_FLAGS) || (i == REG_SEQ) ||
             ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
-            ((i >= REG_CMD) && (i <= REG_MAP_CRC_H))) {
+            ((i >= REG_CMD) && (i <= REG_MGR))) {
             continue;
         }
         crc ^= (uint16_t)((uint16_t)g_regs[i] << 8);
@@ -237,6 +255,13 @@ static void manager_search(void)
 void manager_poll(void)
 {
     ow_status_t st;
+
+    if ((manager_state == MGR_WAIT) && (pause_requested != 0u)) {
+        paused = 1u;
+    }
+    if (paused != 0u) {
+        return;
+    }
 
     if ((g_cmd != 0u) && (manager_state == MGR_WAIT) && ow_delay_poll()) {
         uint8_t cmd = g_cmd;

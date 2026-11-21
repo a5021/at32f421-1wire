@@ -25,10 +25,11 @@ Canonical description of the I2C slave register file exposed by
 | `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
 | `0x40..0x47` | 8 | `REG_EEPROM` | Last DS2431 read block |
 | `0x48` | 1 | `REG_EEPROM_STATUS` | DS2431 status (`0x00` = OK, `0xFF` = invalid) |
-| `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters (writable) |
+| `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters, `4` = pause, `5` = resume (writable) |
 | `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed (writable) |
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
 | `0x63` | 2 | `REG_MAP_CRC` | CRC-16/CCITT over the snapshot, little-endian |
+| `0x65` | 1 | `REG_MGR` | Manager state, `0x80` set while paused (see below) |
 | `0x70..0x78` | 9 | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
 | `0x80..0xFF` | 128 | `REG_ROMS` | 16 × 8-byte ROM table |
 
@@ -90,6 +91,10 @@ matched in that window, so a live transfer is never disturbed. A low SCL is
 never treated as a fault: that is the slave's own clock stretch.
 
 `CMD_CLEAR_COUNTERS` clears the counters, the flags and `REG_FRAMES`.
+`CMD=4` pauses the manager and `CMD=5` resumes it; the pause takes effect in
+the idle state, so a conversion or an EEPROM read is never cut in half. While
+paused the snapshot is frozen, which turns the map into a static reference
+for retry diagnostics.
 
 ## Fault injection (`REG_FAULT`)
 
@@ -125,6 +130,7 @@ computing the same CRC:
 | `0x08` | `REG_SEQ`: intentionally odd while a publish is in progress |
 | `0x09..0x0F` | health block and `REG_SPEED`, injected at read time |
 | `0x60..0x64` | command latch, selection, fault and the CRC itself |
+| `0x65` | `REG_MGR`: the manager state is live diagnostics |
 
 Everything else (header counts, temperatures, statuses, EEPROM block,
 scratchpad, ROM table) changes only inside `publish()`, so a stable `REG_SEQ`

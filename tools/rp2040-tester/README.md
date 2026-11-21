@@ -179,10 +179,16 @@ retry offsets: 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 unknown 0
 ```
 
 `phase` says whether the manager was busy (converting, searching or
-publishing) when the read failed, `offsets` is a 16-bucket histogram over the
-256-byte map, and the samples name the class, attempt, cycle, flags, corrupted
-byte and duration. Bytes that legitimately change between two reads are
-skipped when locating the corrupted one.
+publishing) when the read failed, `manager` breaks that down by state,
+`transport steps` says which of the three transactions failed, `bit positions`
+shows which bit of the corrupted byte flipped, `offsets` is a 16-bucket
+histogram over the 256-byte map, and the samples name the class, attempt,
+cycle, flags, corrupted byte and duration. The corruption offset is only
+reported when two consecutive clean reads agree, so a legitimate update is
+never mistaken for a bit error.
+
+`cmd 4` freezes the manager and `cmd 5` resumes it. A run with the manager
+paused is the control experiment: a static map and no 1-Wire current at all.
 
 ### Bus health (T43-T47)
 
