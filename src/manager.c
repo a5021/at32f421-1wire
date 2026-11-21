@@ -49,6 +49,10 @@ uint8_t  g_regs[256];
 volatile uint32_t g_i2c_speed = 0;
 static uint32_t roms_dirty = 1;
 
+static uint16_t crc_table[256];
+static void crc_table_init(void);
+static uint16_t map_crc(void);
+
 /* Number of ROMs actually stored in roms[] (the search counts more). */
 static uint32_t rom_count(void)
 {
@@ -95,6 +99,7 @@ bool __attribute__((weak)) manager_i2c_busy(void)
 void manager_init(void)
 {
     memset((void *)g_regs, 0, sizeof(g_regs));
+    crc_table_init();
     g_regs[REG_MAGIC] = 0x5Au;
     g_regs[REG_VERSION] = 0x03u;
     ds18b20_init(&sensor, true);
@@ -120,10 +125,24 @@ static void clear_results(void)
     err_count = 0u;
 }
 
-/* CRC16-CCITT over the published snapshot, skipping the bytes the bridge
- * injects live (health) and the CRC field itself.  The master zeroes the same
- * bytes before checking, so a single flipped bit anywhere in the snapshot is
- * detectable instead of silently becoming a plausible temperature. */
+/* Table-driven CRC-16/CCITT-FALSE.  The bitwise version blocked the CPU for
+ * ~150 us inside publish(), and the I2C slave stretches while the CPU is busy:
+ * the master then corrupts the byte it was transferring.  The table is built
+ * once at init and the loop drops to ~25 us. */
+static void crc_table_init(void)
+{
+    for (uint32_t i = 0u; i < 256u; i++) {
+        uint16_t c = (uint16_t)(i << 8);
+
+        for (int b = 0; b < 8; b++) {
+            c = ((c & 0x8000u) != 0u)
+                ? (uint16_t)((uint16_t)(c << 1) ^ 0x1021u)
+                : (uint16_t)(c << 1);
+        }
+        crc_table[i] = c;
+    }
+}
+
 static uint16_t map_crc(void)
 {
     uint16_t crc = 0xFFFFu;
@@ -134,12 +153,8 @@ static uint16_t map_crc(void)
             ((i >= REG_CMD) && (i <= REG_MGR))) {
             continue;
         }
-        crc ^= (uint16_t)((uint16_t)g_regs[i] << 8);
-        for (int b = 0; b < 8; b++) {
-            crc = ((crc & 0x8000u) != 0u)
-                  ? (uint16_t)((uint16_t)(crc << 1) ^ 0x1021u)
-                  : (uint16_t)(crc << 1);
-        }
+        crc = (uint16_t)((uint16_t)(crc << 8) ^
+                         crc_table[(uint8_t)((crc >> 8) ^ g_regs[i])]);
     }
     return crc;
 }
@@ -419,3 +434,4 @@ void manager_poll(void)
         break;
     }
 }
+

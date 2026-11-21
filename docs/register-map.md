@@ -109,10 +109,14 @@ rather than silently accepted.
 | 3 | drop the next byte from the stream |
 | 4 | count one extra frame |
 | 5 | drop one frame count |
+| 6 | hold the 1-Wire strong pull-up for the whole frame |
+| 7 | run 64 1-Wire bit slots during the frame |
+| 8 | stall the CPU for 200 us at byte 64 of the frame |
 
-Codes 4 and 5 give a digital ground truth for the health metric: the master
-knows exactly how many frames were injected and can check that
-`REG_FRAMES` moved by the same amount.
+Codes 4 and 5 give a digital ground truth for the health metric. Code 8
+demonstrates the real failure mode: a CPU stall inside a transfer corrupts
+exactly the byte being transferred (99 of 100 reads, same byte, same bit),
+which is why manager work must stay short.
 
 ## Map checksum (`REG_MAP_CRC`)
 

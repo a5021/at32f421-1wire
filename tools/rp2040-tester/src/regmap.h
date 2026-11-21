@@ -57,6 +57,9 @@
 #define FAULT_SKIP_BYTE         3u
 #define FAULT_EXTRA_FRAME       4u
 #define FAULT_DROP_FRAME        5u
+#define FAULT_CURRENT           6u
+#define FAULT_EDGES             7u
+#define FAULT_STALL             8u
 
 #define BRIDGE_VERSION          3u
 

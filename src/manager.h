@@ -58,6 +58,9 @@ extern "C" {
 #define FAULT_SKIP_BYTE         3u
 #define FAULT_EXTRA_FRAME       4u
 #define FAULT_DROP_FRAME        5u
+#define FAULT_CURRENT           6u      /* strong pull-up during the transfer */
+#define FAULT_EDGES             7u      /* 1-Wire burst during the transfer */
+#define FAULT_STALL             8u      /* CPU stall in the middle of a read */
 
 #define DEV_MAX                 16u
 _Static_assert(REG_ROMS + 8u * DEV_MAX <= 256u, "ROM map overflows the register file");

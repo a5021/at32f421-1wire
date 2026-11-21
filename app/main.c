@@ -39,6 +39,18 @@ static uint8_t  pending_cmd;
 static uint8_t fault_next;          /* armed for the next transmitted byte */
 static uint8_t fault_pending;       /* written during the current transaction */
 static uint8_t fault_drop_frame;
+static uint8_t fault_current;       /* strong pull-up during the next frame */
+static uint8_t forced_pullup;       /* we turned the strong pull-up on */
+static uint8_t fault_edges;         /* 1-Wire burst during the next frame */
+static uint8_t stall_armed;         /* stall once at byte 64 of the read */
+static uint16_t tx_index;           /* transmitted bytes in this frame */
+static const uint8_t fault_pulses[65] = {
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    0
+};
 
 volatile uint32_t g_i2c_err_ack;
 volatile uint32_t g_i2c_err_bus;
@@ -127,6 +139,11 @@ static void health_clear(void)
     fault_next = 0u;
     fault_pending = 0u;
     fault_drop_frame = 0u;
+    fault_current = 0u;
+    forced_pullup = 0u;
+    fault_edges = 0u;
+    stall_armed = 0u;
+    tx_index = 0u;
 }
 
 static void fault_apply(uint8_t code)
@@ -141,6 +158,15 @@ static void fault_apply(uint8_t code)
     case FAULT_BIT_FLIP:
     case FAULT_SKIP_BYTE:
         fault_pending = code;
+        break;
+    case FAULT_CURRENT:
+        fault_current = 1u;
+        break;
+    case FAULT_EDGES:
+        fault_edges = 1u;
+        break;
+    case FAULT_STALL:
+        stall_armed = 1u;
         break;
     default:
         break;
@@ -271,6 +297,11 @@ static void i2c_bus_recover(void)
     fault_next = 0u;
     fault_pending = 0u;
     fault_drop_frame = 0u;
+    fault_current = 0u;
+    forced_pullup = 0u;
+    fault_edges = 0u;
+    stall_armed = 0u;
+    tx_index = 0u;
     sda_low_seen = false;
     last_recovery_ms = g_ms;
 
@@ -315,6 +346,14 @@ static void i2c_send_byte(void)
 {
     uint8_t v = reg_byte(reg_ptr);
 
+    if ((stall_armed != 0u) && (tx_index == 64u)) {
+        uint32_t us = (uint32_t)(g_regs[REG_SELECTED] & 0x0Fu) * 20u;
+
+        stall_armed = 0u;
+        spin_us((us == 0u) ? 20u : us);  /* stall length from REG_SELECTED */
+    }
+    tx_index++;
+
     if (fault_next != 0u) {
         uint8_t f = fault_next;
 
@@ -350,11 +389,21 @@ static void i2c_poll(void)
             g_frames--;
             fault_drop_frame = 0u;
         }
+        if (fault_current != 0u) {
+            fault_current = 0u;
+            forced_pullup = 1u;
+            ow_hal_strong_pullup(true);     /* deliberate rail load */
+        }
+        if (fault_edges != 0u) {
+            fault_edges = 0u;
+            ow_hal_feed(fault_pulses, 64u); /* 64 slots ~ 640 us of edges */
+        }
         sda_low_seen = false;
 
         if ((sts2 & STS2_DIRF) != 0u) {
             tx_mode = 1;
             rx_mode = 0;
+            tx_index = 0u;
             i2c_send_byte();
         } else {
             rx_mode = 1;
@@ -403,6 +452,10 @@ static void i2c_poll(void)
         rx_mode = 0;
         tx_mode = 0;
         first_byte = 0;
+        if (forced_pullup != 0u) {
+            forced_pullup = 0u;
+            ow_hal_strong_pullup(false);    /* release only what we forced */
+        }
         if (fault_pending != 0u) {
             fault_next = fault_pending;     /* one shot, next transaction */
             fault_pending = 0u;
@@ -482,3 +535,5 @@ void HardFault_Handler(void)
 void MemManage_Handler(void) __attribute__((alias("HardFault_Handler")));
 void BusFault_Handler(void) __attribute__((alias("HardFault_Handler")));
 void UsageFault_Handler(void) __attribute__((alias("HardFault_Handler")));
+
+

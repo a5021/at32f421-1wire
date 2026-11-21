@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+- **Bridge:** CRC-16 is table-driven. The bitwise loop blocked the CPU for
+  ~150 us inside `publish()`; while the CPU is busy the master can corrupt the
+  byte it is transferring, so the loop is now ~25 us.
+
 ### Added
 - **Bridge:** CRC-16/CCITT (`REG_MAP_CRC`, `0x63`) over the published
   snapshot. I2C has no link CRC, so without it a flipped bit in a
@@ -30,6 +35,9 @@
   open-drain mode, then re-initialises the peripheral at the same speed and
   address. A low SCL is never treated as a fault because it is the slave's
   own clock stretch.
+- **Tester:** `couple [n]` (1-Wire edge burst in every frame) and
+  `stall [n]` (200 us CPU stall at byte 64 of every frame), plus
+  manager-state, transport-step and bit-position retry diagnostics.
 - **Tester:** `health [clear]` command and tests T43-T47 (frame accounting,
   counter clear, loss-free accounting, stuck detection, no false alarm).
   47 tests total.

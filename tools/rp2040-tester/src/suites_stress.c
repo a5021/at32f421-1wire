@@ -261,7 +261,7 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
     return -1;
 }
 
-void stress_run(uint32_t count)
+static void stress_loop(uint32_t count, int mode, const char *label)
 {
     uint32_t torn = 0u;
     uint32_t invalid = 0u;
@@ -280,7 +280,14 @@ void stress_run(uint32_t count)
     g_last_rom[0] = '\0';
 
     for (uint32_t i = 0u; i < count; i++) {
-        int r = read_map_checked(&torn, &invalid, &max_us);
+        int r;
+
+        if (mode == 1) {
+            (void)bus_fault(FAULT_EDGES);
+        } else if (mode == 2) {
+            (void)bus_fault(FAULT_STALL);
+        }
+        r = read_map_checked(&torn, &invalid, &max_us);
 
         if (r < 0) {
             errors++;
@@ -294,14 +301,33 @@ void stress_run(uint32_t count)
             }
         }
     }
-    printf("stress %u: %u good, %u torn, %u invalid, %u errors, max %u us\n",
-           count, good, torn, invalid, errors, max_us);
+    printf("%s %u: %u good, %u torn, %u invalid, %u errors, max %u us\n",
+           label, count, good, torn, invalid, errors, max_us);
     printf("errors: %u timeout, %u nack, %u other; transport %u, validate %u, retries %u, last: %s, val: %s [%s]\n",
            (unsigned)bus_err_timeout, (unsigned)bus_err_nack,
            (unsigned)bus_err_other, (unsigned)g_transport,
            (unsigned)g_validate, (unsigned)g_retries, g_last_why, g_val_why,
            g_last_rom);
     retry_stats_print();
+}
+
+void stress_run(uint32_t count)
+{
+    stress_loop(count, 0, "stress");
+}
+
+/* Every read is preceded by a deliberate 1-Wire edge burst, so the crosstalk
+ * hypothesis can be tested in seconds.  Run it with the manager paused. */
+void couple_run(uint32_t count)
+{
+    stress_loop(count, 1, "couple");
+}
+
+/* Every read is stalled for 200 us at byte 64, simulating the CPU time the
+ * manager takes between I2C transfers. */
+void stall_run(uint32_t count)
+{
+    stress_loop(count, 2, "stall");
 }
 
 void suite_stress(void)

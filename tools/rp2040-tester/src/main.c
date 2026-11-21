@@ -39,6 +39,8 @@ void suite_stress(void);
 void suite_fault(void);
 int  fuzz_run(uint32_t seed, uint32_t ops, uint32_t *digest);
 void stress_run(uint32_t count);
+void couple_run(uint32_t count);
+void stall_run(uint32_t count);
 
 static lineedit_t editor;
 
@@ -820,6 +822,8 @@ static const cmd_desc_t command_table[] = {
     { "bench", "bench", "100 vs 400 kHz read time" },
     { "watch", "watch temp|status|cycle", "1 Hz display until a key" },
     { "stress", "stress [n]", "n map reads at the current link speed" },
+    { "couple", "couple [n]", "same, with a strong 1-Wire load in every frame" },
+    { "stall", "stall [n]", "same, with a 200 us CPU stall at byte 64" },
     { "adc", "adc", "VSYS and chip temperature" },
     { "clear", "clear", "clear the terminal" },
     { "history", "history [clear]", "show or reset command history" },
@@ -1030,6 +1034,20 @@ static void handle_line(char *line)
                                           : 1000u;
 
         stress_run(count == 0u ? 1000u : count);
+        return;
+    }
+    if (strcmp(cmd, "couple") == 0) {
+        uint32_t count = (arg[0] != '\0') ? (uint32_t)strtoul(arg, NULL, 0)
+                                          : 1000u;
+
+        couple_run(count == 0u ? 1000u : count);
+        return;
+    }
+    if (strcmp(cmd, "stall") == 0) {
+        uint32_t count = (arg[0] != '\0') ? (uint32_t)strtoul(arg, NULL, 0)
+                                          : 1000u;
+
+        stall_run(count == 0u ? 1000u : count);
         return;
     }
     if (strcmp(cmd, "adc") == 0) {
