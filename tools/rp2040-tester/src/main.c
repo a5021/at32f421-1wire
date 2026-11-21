@@ -652,6 +652,8 @@ static void cmd_health(const char *arg)
             printf("clear failed\n");
             return;
         }
+        sleep_ms(10u);
+        (void)send_cmd(CMD_STALL_RESET);
         bus_stats_reset();
         bus_health_reset();
         printf("health counters cleared\n");
@@ -680,6 +682,14 @@ static void cmd_health(const char *arg)
            (bus_health_flags & HEALTH_SDA_STUCK) ? " sda-stuck" : "",
            (bus_health_flags & HEALTH_RECOVERED) ? " recovered" : "");
     printf("verdict: %s\n", health_verdict());
+
+    {
+        uint8_t st[2] = { 0, 0 };
+
+        if (bus_read_reg(REG_STALL, st, sizeof(st)) == (int)sizeof(st)) {
+            printf("manager: max stall %u us in state %u\n", st[0], st[1]);
+        }
+    }
 }
 
 static void cmd_watch(const char *arg)

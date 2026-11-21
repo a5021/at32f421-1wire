@@ -1,6 +1,13 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef __arm__
+#include "at32f421.h"
+#define NOW_CYCLES() (DWT->CYCCNT)
+#else
+#define NOW_CYCLES() (0u)
+#endif
+
 #include "manager.h"
 #include "onewire.h"
 #include "ds18b20.h"
@@ -51,7 +58,6 @@ static uint32_t roms_dirty = 1;
 
 static uint16_t crc_table[256];
 static void crc_table_init(void);
-static uint16_t map_crc(void);
 
 /* Number of ROMs actually stored in roms[] (the search counts more). */
 static uint32_t rom_count(void)
@@ -143,23 +149,22 @@ static void crc_table_init(void)
     }
 }
 
-static uint16_t map_crc(void)
-{
-    uint16_t crc = 0xFFFFu;
+static uint8_t  shadow[256];
+static uint8_t  pub_phase;
+static uint32_t pub_pos;
+static uint16_t pub_crc;
+static uint16_t cycle_next;
+uint32_t pub_phase_max[3];
 
-    for (uint32_t i = 0u; i < 256u; i++) {
-        if ((i == REG_FLAGS) || (i == REG_SEQ) ||
-            ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
-            ((i >= REG_CMD) && (i <= REG_MGR))) {
-            continue;
-        }
-        crc = (uint16_t)((uint16_t)(crc << 8) ^
-                         crc_table[(uint8_t)((crc >> 8) ^ g_regs[i])]);
-    }
-    return crc;
+static bool crc_skip(uint32_t i)
+{
+    return (i == REG_FLAGS) || (i == REG_SEQ) ||
+           ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
+           ((i >= REG_CMD) && (i <= (REG_STALL_STATE + 1u)));
 }
 
-static void publish(void)
+/* Build the next snapshot into the shadow buffer. */
+static void publish_fill(uint8_t *dst)
 {
     uint8_t flags = FLAG_SNAPSHOT | FLAG_SEARCH_DONE;
     if (search_error != 0u) {
@@ -172,56 +177,129 @@ static void publish(void)
         flags |= FLAG_TEMP_ERROR;
     }
 
-    g_regs[REG_SEQ] = ++pub_seq;        /* odd: update in progress */
-    cycle++;
-    g_regs[REG_MAGIC] = 0x5Au;
-    g_regs[REG_VERSION] = 0x03u;
-    g_regs[REG_FLAGS] = flags;
-    g_regs[REG_DEVICES] = (uint8_t)((device_count > 255u) ? 255u : device_count);
-    g_regs[REG_DS18B20] = (uint8_t)((ds18b20_count > 255u) ? 255u : ds18b20_count);
-    g_regs[REG_ERROR] = (uint8_t)last_error;
-    g_regs[REG_CYCLE_L] = (uint8_t)(cycle & 0xFFu);
-    g_regs[REG_CYCLE_H] = (uint8_t)(cycle >> 8);
-    g_regs[REG_SPEED] = (uint8_t)g_i2c_speed;
+    cycle_next = (uint16_t)(cycle + 1u);
+    dst[REG_MAGIC] = 0x5Au;
+    dst[REG_VERSION] = 0x03u;
+    dst[REG_FLAGS] = flags;
+    dst[REG_DEVICES] = (uint8_t)((device_count > 255u) ? 255u : device_count);
+    dst[REG_DS18B20] = (uint8_t)((ds18b20_count > 255u) ? 255u : ds18b20_count);
+    dst[REG_ERROR] = (uint8_t)last_error;
+    dst[REG_CYCLE_L] = (uint8_t)(cycle_next & 0xFFu);
+    dst[REG_CYCLE_H] = (uint8_t)(cycle_next >> 8);
+    dst[REG_SPEED] = (uint8_t)g_i2c_speed;
 
     for (uint32_t i = 0u; (i < ds18b20_count) && (i < DEV_MAX); i++) {
-        g_regs[REG_TEMP + 2u * i] = (uint8_t)((uint16_t)temp_raw[i] & 0xFFu);
-        g_regs[REG_TEMP + 2u * i + 1u] = (uint8_t)((uint16_t)temp_raw[i] >> 8);
-        g_regs[REG_TEMP_STATUS + i] = temp_status[i];
+        dst[REG_TEMP + 2u * i] = (uint8_t)((uint16_t)temp_raw[i] & 0xFFu);
+        dst[REG_TEMP + 2u * i + 1u] = (uint8_t)((uint16_t)temp_raw[i] >> 8);
+        dst[REG_TEMP_STATUS + i] = temp_status[i];
     }
     /* Slots this cycle did not fill must not keep the previous cycle's
      * readings: a rescan can leave fewer sensors than before. */
     for (uint32_t i = ds18b20_count; i < DEV_MAX; i++) {
-        g_regs[REG_TEMP + 2u * i] = 0x00u;
-        g_regs[REG_TEMP + 2u * i + 1u] = 0x80u;      /* 0x8000 = invalid */
-        g_regs[REG_TEMP_STATUS + i] = 0xFFu;
+        dst[REG_TEMP + 2u * i] = 0x00u;
+        dst[REG_TEMP + 2u * i + 1u] = 0x80u;      /* 0x8000 = invalid */
+        dst[REG_TEMP_STATUS + i] = 0xFFu;
     }
 
-    memcpy((void *)&g_regs[REG_EEPROM], eeprom_data, 8u);
-    g_regs[REG_EEPROM_STATUS] = eeprom_status;
+    memcpy((void *)&dst[REG_EEPROM], eeprom_data, 8u);
+    dst[REG_EEPROM_STATUS] = eeprom_status;
 
     /* A selection outside the DS18B20 table must not expose a stale
      * scratchpad: publish the invalid marker instead. */
-    if ((g_regs[REG_SELECTED] & 0x0Fu) >= ds18b20_count) {
+    if ((dst[REG_SELECTED] & 0x0Fu) >= ds18b20_count) {
         memset(sp_sel, 0xFF, sizeof(sp_sel));
     }
 
-    memcpy((void *)&g_regs[REG_SCRATCH], sp_sel, 9u);
+    memcpy((void *)&dst[REG_SCRATCH], sp_sel, 9u);
 
     if (roms_dirty != 0u) {
         for (uint32_t i = 0u; (i < device_count) && (i < DEV_MAX); i++) {
-            memcpy((void *)&g_regs[REG_ROMS + 8u * i], roms[i], 8u);
+            memcpy((void *)&dst[REG_ROMS + 8u * i], roms[i], 8u);
         }
         for (uint32_t i = device_count; i < DEV_MAX; i++) {
-            memset((void *)&g_regs[REG_ROMS + 8u * i], 0xFF, 8u);
+            memset((void *)&dst[REG_ROMS + 8u * i], 0xFF, 8u);
         }
         roms_dirty = 0u;
     }
-    uint16_t crc = map_crc();
+}
 
-    g_regs[REG_MAP_CRC_L] = (uint8_t)(crc & 0xFFu);
-    g_regs[REG_MAP_CRC_H] = (uint8_t)(crc >> 8);
-    g_regs[REG_SEQ] = ++pub_seq;        /* even: snapshot stable */
+/* One short step of the publish.  The CRC is spread over several calls: the
+ * I2C slave can only keep the CPU busy for about eight bit times before the
+ * master corrupts the byte it is transferring, and the whole 256-byte CRC is
+ * far longer than that. */
+static void publish_step(void)
+{
+    uint32_t t0 = NOW_CYCLES();
+    uint8_t ph_in = pub_phase;
+
+    switch (pub_phase) {
+    case 0u:
+        memcpy((void *)shadow, (const void *)g_regs, sizeof(shadow));
+        publish_fill(shadow);
+        pub_crc = 0xFFFFu;
+        pub_pos = 0u;
+        pub_phase = 1u;
+        break;
+
+    case 1u: {
+        uint32_t end = pub_pos + 32u;
+
+        if (end > 256u) {
+            end = 256u;
+        }
+        for (uint32_t i = pub_pos; i < end; i++) {
+            if (crc_skip(i)) {
+                continue;
+            }
+            pub_crc = (uint16_t)((uint16_t)(pub_crc << 8) ^
+                       crc_table[(uint8_t)((pub_crc >> 8) ^ shadow[i])]);
+        }
+        pub_pos = end;
+        if (pub_pos >= 256u) {
+            shadow[REG_MAP_CRC_L] = (uint8_t)(pub_crc & 0xFFu);
+            shadow[REG_MAP_CRC_H] = (uint8_t)(pub_crc >> 8);
+            pub_phase = 2u;
+        }
+        break;
+    }
+
+    default:
+        /* The host can change the selection while the CRC is being built; the
+         * scratchpad was chosen for the old one, so rebuild instead of
+         * publishing a mismatched pair. */
+        if ((g_regs[REG_SELECTED] & 0x0Fu) != shadow[REG_SELECTED]) {
+            pub_phase = 0u;
+            break;
+        }
+        {
+            /* Registers the host owns must survive the bulk copy. */
+            uint8_t live_cmd = g_regs[REG_CMD];
+            uint8_t live_sel = g_regs[REG_SELECTED];
+
+            g_regs[REG_SEQ] = ++pub_seq;    /* odd: update in progress */
+            memcpy((void *)g_regs, (const void *)shadow, sizeof(shadow));
+            g_regs[REG_CMD] = live_cmd;
+            g_regs[REG_SELECTED] = live_sel;
+            g_regs[REG_SPEED] = (uint8_t)g_i2c_speed;
+            cycle = cycle_next;
+            g_regs[REG_SEQ] = ++pub_seq;    /* even: snapshot stable */
+        }
+        pub_phase = 0u;
+        manager_state = MGR_WAIT;
+        ow_delay_start(200000u);
+        break;
+    }
+
+    {
+        uint32_t d = NOW_CYCLES() - t0;
+
+        if (ph_in > 2u) {
+            ph_in = 2u;
+        }
+        if (d > pub_phase_max[ph_in]) {
+            pub_phase_max[ph_in] = d;
+        }
+    }
 }
 
 static void manager_search(void)
@@ -416,9 +494,7 @@ void manager_poll(void)
         if (manager_i2c_busy()) {
             return;
         }
-        publish();
-        manager_state = MGR_WAIT;
-        ow_delay_start(200000u);
+        publish_step();
         break;
 
     case MGR_WAIT:
@@ -434,4 +510,8 @@ void manager_poll(void)
         break;
     }
 }
+
+
+
+
 

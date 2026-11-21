@@ -29,6 +29,8 @@
 #define REG_MAP_CRC_L           0x63u
 #define REG_MAP_CRC_H           0x64u
 #define REG_MGR                 0x65u
+#define REG_STALL               0x66u
+#define REG_STALL_STATE         0x67u
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 
@@ -50,6 +52,9 @@
 #define CMD_RESCAN              1u
 #define CMD_REREAD_EEPROM       2u
 #define CMD_CLEAR_COUNTERS      3u
+#define CMD_PAUSE               4u
+#define CMD_RESUME              5u
+#define CMD_STALL_RESET         7u
 
 /* REG_FAULT codes, one shot. */
 #define FAULT_BIT_FLIP          1u

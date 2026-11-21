@@ -48,7 +48,7 @@ static bool map_volatile_index(int i)
 {
     return (i == (int)REG_FLAGS) || (i == (int)REG_SEQ) ||
            ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
-           ((i >= (int)REG_CMD) && (i <= (int)REG_MGR));
+           ((i >= (int)REG_CMD) && (i <= (int)REG_STALL_STATE + 1));
 }
 
 static void retry_stats_reset(void)
@@ -626,3 +626,4 @@ void suite_stress(void)
     bus_set_speed(BUS_SPEED_400K);
     write_speed(1u);
 }
+

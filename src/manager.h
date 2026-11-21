@@ -34,6 +34,8 @@ extern "C" {
 #define REG_MAP_CRC_L           0x63u
 #define REG_MAP_CRC_H           0x64u
 #define REG_MGR                 0x65u
+#define REG_STALL               0x66u   /* worst manager_poll duration, us */
+#define REG_STALL_STATE         0x67u   /* manager state of that call */
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 

@@ -25,6 +25,10 @@
 extern volatile uint32_t g_i2c_speed;
 
 extern uint8_t g_regs[256];
+extern uint32_t pub_phase_max[3];
+
+extern uint32_t publish_all_cycles;
+extern uint32_t publish_crc_cycles;
 
 static uint32_t reg_ptr;
 static uint32_t rx_mode;
@@ -69,6 +73,10 @@ volatile uint32_t g_i2c_err_ouf;
 static uint32_t g_frames;           /* matched addresses */
 static uint8_t  g_health;           /* HEALTH_* sticky bits */
 static uint8_t  g_err_bus;          /* saturated BUSERR count */
+static volatile uint32_t max_cycles;/* worst manager_poll duration */
+static uint8_t  max_state;          /* state during that call */
+static uint32_t cycles_per_us = 120u;   /* measured at boot */
+
 static uint32_t g_ms;               /* 1 ms tick, polled from SysTick */
 static uint32_t g_scl_hz = 100000u; /* timing currently programmed */
 static uint32_t sda_low_since;
@@ -93,12 +101,38 @@ static void timebase_init(void)
     SysTick->LOAD = (clock_ahb_hz() / 8000u) - 1u;
     SysTick->VAL = 0u;
     SysTick->CTRL = 0x00000001u;    /* HCLK/8, enable, no tick interrupt */
+
+    /* Cycle counter for measuring how long the manager blocks the loop. */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0u;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
 static void timebase_poll(void)
 {
     if ((SysTick->CTRL & 0x00010000u) != 0u) {
         g_ms++;
+    }
+}
+
+/* Measure how many DWT cycles a real millisecond takes, so the diagnostics do
+ * not depend on the nominal clock. */
+static void calibrate_cycles(void)
+{
+    uint32_t m0 = g_ms;
+    uint32_t t0 = DWT->CYCCNT;
+
+    while ((g_ms - m0) < 50u) {
+        timebase_poll();
+    }
+
+    uint32_t c = DWT->CYCCNT - t0;
+
+    if ((c > 5000u) && (c < 12000000u)) {
+        cycles_per_us = c / 50000u;
+        if (cycles_per_us == 0u) {
+            cycles_per_us = 1u;
+        }
     }
 }
 
@@ -122,6 +156,21 @@ static uint8_t reg_byte(uint32_t addr)
         return g_err_bus;
     case REG_MGR:
         return manager_state_reg();
+    case REG_STALL: {
+        uint32_t us = pub_phase_max[0] / cycles_per_us;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
+    case REG_STALL_STATE: {
+        uint32_t us = pub_phase_max[1] / cycles_per_us;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
+    case REG_STALL_STATE + 1u: {
+        uint32_t us = pub_phase_max[2] / cycles_per_us;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
     default:
         return g_regs[addr & 0xFFu];
     }
@@ -464,6 +513,12 @@ static void i2c_poll(void)
         if (pending_cmd != 0u) {
             if (pending_cmd == 3u) {
                 health_clear();
+            } else if (pending_cmd == 7u) {
+                max_cycles = 0u;
+                max_state = 0u;
+                pub_phase_max[0] = 0u;
+                pub_phase_max[1] = 0u;
+                pub_phase_max[2] = 0u;
             }
             manager_command(pending_cmd);
             pending_cmd = 0;
@@ -511,6 +566,7 @@ int main(void)
 {
     clock_config();
     timebase_init();
+    calibrate_cycles();
     ow_hal_init();
     i2c_hw_init();
 
@@ -521,7 +577,16 @@ int main(void)
         bus_health_poll();
         i2c_poll();
         if (!i2c_active()) {
+            uint8_t st = (uint8_t)(manager_state_reg() & 0x0Fu);
+            uint32_t t0 = DWT->CYCCNT;
+
             manager_poll();
+            uint32_t d = DWT->CYCCNT - t0;
+
+            if (d > max_cycles) {
+                max_cycles = d;
+                max_state = st;         /* state the call started in */
+            }
         }
     }
 }
@@ -535,5 +600,9 @@ void HardFault_Handler(void)
 void MemManage_Handler(void) __attribute__((alias("HardFault_Handler")));
 void BusFault_Handler(void) __attribute__((alias("HardFault_Handler")));
 void UsageFault_Handler(void) __attribute__((alias("HardFault_Handler")));
+
+
+
+
 
 

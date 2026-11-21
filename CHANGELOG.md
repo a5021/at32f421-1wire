@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+- **Bridge:** `publish()` no longer rebuilds the map in one blocking call. It
+  fills a 256-byte shadow buffer, computes the CRC in 32-byte steps and only
+  then copies the shadow into `g_regs`. The host-writable `REG_CMD`,
+  `REG_SELECTED` and `REG_SPEED` are preserved across the copy, and a
+  selection change during the build restarts it instead of publishing a
+  mismatched scratchpad.
+- **Bridge:** `REG_STALL`, `REG_STALL_STATE` and `0x68` expose the worst
+  publish-phase durations; `CMD=7` clears them.
+
 ### Fixed
 - **Bridge:** CRC-16 is table-driven. The bitwise loop blocked the CPU for
   ~150 us inside `publish()`; while the CPU is busy the master can corrupt the

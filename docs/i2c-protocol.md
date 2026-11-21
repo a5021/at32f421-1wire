@@ -83,8 +83,9 @@ The budget therefore scales with the bit time:
 | 100 kHz | 10 us | ~80 us | 0 retries in 30 000 reads |
 
 Every step between two `i2c_poll()` calls must stay under that budget.
-`publish()` is the longest one at ~25 us after the CRC loop became
-table-driven. The host recovers from any overflow by re-reading, and the map
+`publish()` used to be the longest one; it is now split into a shadow-buffer
+fill, 32-byte CRC steps and a final 256-byte copy, so the worst single step is
+much shorter. The host recovers from any overflow by re-reading, and the map
 CRC makes the corruption visible instead of silent, so this is a latency
 trade-off, not data loss.
 
