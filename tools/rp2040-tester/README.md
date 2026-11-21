@@ -71,7 +71,7 @@ recover          nine clocks and STOP on the I2C bus
 health [clear]   bus health: transactions, missed frames, sticky flags, verdict
 fault <code>      arm one REG_FAULT code (1, 3, 4, 5)
 fuzz [ops] [seed] inject faults on both sides with a reproducible seed
-stress [n]       n map reads at the current link speed, with error counters
+stress [n]       n map reads at the current link speed, with retry diagnostics
 sample [bytes]   measure SCL with PIO (kHz, min/med/max, stretch)
 bench            100 vs 400 kHz on a 64-byte read
 watch temp|status|cycle   1 Hz display, any key stops
@@ -169,6 +169,20 @@ the longest low gives the stretch.
 | T40 | 100 NACKs, then a valid map |
 | T41 | 1000 alternating NACK/ACK transactions |
 | T42 | final map valid and cycle still advancing |
+
+`stress` and `soak` also print where the retries came from:
+
+```
+retry phase: busy 1, idle 0, unknown 0
+retry offsets: 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 unknown 0
+  #1 validate try1 cycle 77 flags 0x1D off 29 6 ms
+```
+
+`phase` says whether the manager was busy (converting, searching or
+publishing) when the read failed, `offsets` is a 16-bucket histogram over the
+256-byte map, and the samples name the class, attempt, cycle, flags, corrupted
+byte and duration. Bytes that legitimately change between two reads are
+skipped when locating the corrupted one.
 
 ### Bus health (T43-T47)
 

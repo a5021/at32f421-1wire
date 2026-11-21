@@ -17,6 +17,96 @@ static uint32_t g_transport;
 static uint32_t g_validate;
 static uint32_t g_retries;
 
+/* Retry diagnostics: where in the cycle and where in the 256-byte map the
+ * failure happened.  The first few events are kept verbatim; the rest only
+ * feed the histograms. */
+#define RETRY_SAMPLES   8
+#define OFF_BUCKETS     16
+
+typedef struct {
+    uint8_t  cls;       /* 0 transport, 1 validate */
+    uint8_t  attempt;
+    uint8_t  flags;
+    uint8_t  off;
+    uint16_t cycle;
+    uint16_t ms;
+} retry_ev_t;
+
+static retry_ev_t g_ev[RETRY_SAMPLES];
+static int      g_ev_n;
+static uint32_t g_phase_busy;
+static uint32_t g_phase_idle;
+static uint32_t g_phase_unknown;
+static uint32_t g_off_bucket[OFF_BUCKETS];
+static uint32_t g_off_unknown;
+
+static void retry_stats_reset(void)
+{
+    g_ev_n = 0;
+    g_phase_busy = 0u;
+    g_phase_idle = 0u;
+    g_phase_unknown = 0u;
+    g_off_unknown = 0u;
+    memset(g_off_bucket, 0, sizeof(g_off_bucket));
+    memset(g_ev, 0, sizeof(g_ev));
+}
+
+static void retry_capture(int cls, int attempt, uint32_t us, int off)
+{
+    uint8_t flags = 0;
+    uint8_t raw[2] = { 0, 0 };
+    bool got_flags = bus_read_reg(REG_FLAGS, &flags, 1u) == 1;
+    uint16_t cycle = 0;
+
+    if (bus_read_reg(REG_CYCLE_L, raw, 2u) == 2) {
+        cycle = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+    }
+
+    if (!got_flags) {
+        g_phase_unknown++;
+    } else if ((flags & FLAG_BUSY) != 0u) {
+        g_phase_busy++;
+    } else {
+        g_phase_idle++;
+    }
+
+    if ((off >= 0) && (off < 256)) {
+        g_off_bucket[off / (256 / OFF_BUCKETS)]++;
+    } else {
+        g_off_unknown++;
+    }
+
+    if (g_ev_n < RETRY_SAMPLES) {
+        retry_ev_t *e = &g_ev[g_ev_n++];
+
+        e->cls = (uint8_t)cls;
+        e->attempt = (uint8_t)attempt;
+        e->flags = got_flags ? flags : 0xFFu;
+        e->off = ((off >= 0) && (off < 256)) ? (uint8_t)off : 0xFFu;
+        e->cycle = cycle;
+        e->ms = (uint16_t)((us > 65535000u) ? 65535u : (us / 1000u));
+    }
+}
+
+static void retry_stats_print(void)
+{
+    printf("retry phase: busy %u, idle %u, unknown %u\n",
+           (unsigned)g_phase_busy, (unsigned)g_phase_idle,
+           (unsigned)g_phase_unknown);
+    printf("retry offsets:");
+    for (int i = 0; i < OFF_BUCKETS; i++) {
+        printf(" %u", (unsigned)g_off_bucket[i]);
+    }
+    printf(" unknown %u\n", (unsigned)g_off_unknown);
+
+    for (int i = 0; i < g_ev_n; i++) {
+        printf("  #%d %s try%d cycle %u flags 0x%02X off %u %u ms\n", i + 1,
+               g_ev[i].cls ? "validate" : "transport", g_ev[i].attempt + 1,
+               g_ev[i].cycle, g_ev[i].flags, g_ev[i].off,
+               (unsigned)g_ev[i].ms);
+    }
+}
+
 static uint32_t rnd(void)
 {
     uint32_t x = rng_state;
@@ -43,6 +133,11 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
             snprintf(g_last_why, sizeof(g_last_why), "i2c");
             g_transport++;
             g_retries++;
+            {
+                int64_t fail_us = absolute_time_diff_us(t0, get_absolute_time());
+
+                retry_capture(0, attempt, (uint32_t)fail_us, -1);
+            }
             continue;
         }
 
@@ -62,6 +157,31 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
         if (map_validate(map, why, sizeof(why))) {
             return 0;
         }
+
+        /* A stable snapshot that fails validation is a payload bit error.
+         * Re-read to find which byte was corrupted: the slave still holds the
+         * correct value, only the transfer was hit. */
+        int off = -1;
+        {
+            uint8_t map2[256];
+
+            if (map_read(map2)) {
+                for (int i = 0; i < 256; i++) {
+                    /* Skip bytes that legitimately change between two reads
+                     * (health counters, seq, flags, speed, control). */
+                    if ((i == REG_FLAGS) || (i == REG_SEQ) ||
+                        ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
+                        ((i >= (int)REG_CMD) && (i <= (int)REG_MAP_CRC_H))) {
+                        continue;
+                    }
+                    if (map[i] != map2[i]) {
+                        off = i;
+                        break;
+                    }
+                }
+            }
+        }
+        retry_capture(1, attempt, (uint32_t)us, off);
 
         strncpy(g_last_why, why, sizeof(g_last_why) - 1u);
         g_last_why[sizeof(g_last_why) - 1u] = '\0';
@@ -102,6 +222,7 @@ void stress_run(uint32_t count)
     g_transport = 0u;
     g_validate = 0u;
     g_retries = 0u;
+    retry_stats_reset();
     g_last_why[0] = '\0';
     g_val_why[0] = '\0';
     g_last_rom[0] = '\0';
@@ -128,6 +249,7 @@ void stress_run(uint32_t count)
            (unsigned)bus_err_other, (unsigned)g_transport,
            (unsigned)g_validate, (unsigned)g_retries, g_last_why, g_val_why,
            g_last_rom);
+    retry_stats_print();
 }
 
 void suite_stress(void)
@@ -180,6 +302,7 @@ void suite_stress(void)
         uint32_t errors = 0u;
 
         g_retries = 0u;
+        retry_stats_reset();
         absolute_time_t deadline = make_timeout_time_ms(g_soak_seconds * 1000u);
 
         while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
@@ -202,6 +325,7 @@ void suite_stress(void)
             t_fail("%u good, %u torn, %u invalid, %u errors", good, torn,
                    invalid, errors);
         }
+        retry_stats_print();
     }
 
     t_start("T37", "random reads");
