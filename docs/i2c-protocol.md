@@ -67,6 +67,27 @@ DS18B20 convert, DS2431 read. Each operation is scheduled as a hardware pass
 on TMR1+DMA and completes asynchronously; `_poll` functions advance the state
 machine by waiting for the timer update flag.
 
+## Slave service latency
+
+The slave ACKs an address in hardware, so the master starts clocking whether
+or not the CPU is ready. If `i2c_poll()` does not load the data register
+within about **8 bit times**, the master samples a released SDA line and the
+byte is corrupted — the first bit comes back as 1 (`0x5A` reads as `0xDA`), or
+a byte in mid-transfer is damaged.
+
+The budget therefore scales with the bit time:
+
+| SCL | Bit time | Budget | Measured |
+|-----|----------|--------|----------|
+| 400 kHz | 2.5 us | ~20 us | 1 retry per ~5 000 reads |
+| 100 kHz | 10 us | ~80 us | 0 retries in 30 000 reads |
+
+Every step between two `i2c_poll()` calls must stay under that budget.
+`publish()` is the longest one at ~25 us after the CRC loop became
+table-driven. The host recovers from any overflow by re-reading, and the map
+CRC makes the corruption visible instead of silent, so this is a latency
+trade-off, not data loss.
+
 ## Flags (`REG_FLAGS`)
 
 | Bit | Mask | Set when |
