@@ -167,13 +167,19 @@ void suite_stress(void)
         }
     }
 
-    t_start("T36", "60 s soak");
+    static char soak_label[32];
+
+    snprintf(soak_label, sizeof(soak_label), "%u s soak",
+             (unsigned)g_soak_seconds);
+    t_start("T36", soak_label);
     {
         uint32_t torn = 0u;
         uint32_t invalid = 0u;
         uint32_t max_us = 0u;
         uint32_t good = 0u;
         uint32_t errors = 0u;
+
+        g_retries = 0u;
         absolute_time_t deadline = make_timeout_time_ms(g_soak_seconds * 1000u);
 
         while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
@@ -190,7 +196,8 @@ void suite_stress(void)
             }
         }
         if ((errors == 0u) && (invalid == 0u) && (good > 0u)) {
-            t_pass("%u good, %u torn, max %u us", good, torn, max_us);
+            t_pass("%u good, %u torn, %u retries, max %u us", good, torn,
+                   (unsigned)g_retries, max_us);
         } else {
             t_fail("%u good, %u torn, %u invalid, %u errors", good, torn,
                    invalid, errors);
