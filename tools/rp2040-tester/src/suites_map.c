@@ -318,4 +318,116 @@ void suite_map(void)
             t_fail("read failed");
         }
     }
+
+    t_start("T43", "health frames");
+    {
+        uint8_t raw[2];
+        uint16_t f1 = 0xFFFFu;
+        uint16_t f2 = 0xFFFFu;
+        bool ok = false;
+
+        if (bus_read_reg(REG_FRAMES_L, raw, 2u) == 2) {
+            f1 = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+            for (int i = 0; i < 16; i++) {
+                uint8_t v;
+
+                (void)bus_read_reg(REG_MAGIC, &v, 1u);
+            }
+            if (bus_read_reg(REG_FRAMES_L, raw, 2u) == 2) {
+                f2 = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+                ok = true;
+            }
+        }
+
+        uint16_t delta = (uint16_t)(f2 - f1);
+
+        /* 16 register reads are 32 address phases; the sampling read that
+         * follows adds one more before the counter is fetched. */
+        if (ok && (delta >= 32u) && (delta <= 34u)) {
+            t_pass("%u frames for 32 transactions", (unsigned)delta);
+        } else {
+            t_fail("frames %u -> %u (delta %u)", (unsigned)f1, (unsigned)f2,
+                   (unsigned)delta);
+        }
+    }
+
+    t_start("T44", "health clear");
+    {
+        uint8_t raw[3];
+        bool ok = send_cmd(CMD_CLEAR_COUNTERS);
+
+        sleep_ms(10u);
+        if (ok && (bus_read_reg(REG_FRAMES_L, raw, 3u) == 3)) {
+            uint16_t frames = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+
+            if ((frames <= 6u) && (raw[2] == 0u)) {
+                t_pass("frames %u, flags 0", (unsigned)frames);
+            } else {
+                t_fail("frames %u, flags 0x%02X", (unsigned)frames, raw[2]);
+            }
+        } else {
+            t_fail("clear or read failed");
+        }
+    }
+
+    t_start("T45", "health accounting");
+    {
+        uint8_t v;
+        int ok = 0;
+
+        bus_health_reset();
+        for (int i = 0; i < 500; i++) {
+            if (bus_read_reg(REG_FLAGS, &v, 1u) == 1) {
+                ok++;
+            }
+        }
+        if (!bus_health_sample()) {
+            t_fail("sample failed");
+        } else if ((bus_health_missed <= 2u) && (bus_health_truncated <= 2u)) {
+            t_pass("%d reads, %u missed, %u truncated", ok,
+                   (unsigned)bus_health_missed,
+                   (unsigned)bus_health_truncated);
+        } else {
+            t_fail("%u missed, %u truncated over %u txn",
+                   (unsigned)bus_health_missed,
+                   (unsigned)bus_health_truncated, (unsigned)bus_txn);
+        }
+    }
+
+    t_start("T46", "health sda stuck");
+    {
+        (void)send_cmd(CMD_CLEAR_COUNTERS);
+        sleep_ms(10u);
+
+        bus_hold_sda_low(50u);
+        sleep_ms(20u);
+
+        if (!bus_health_sample()) {
+            t_fail("sample failed");
+        } else if ((bus_health_flags & HEALTH_SDA_STUCK) == 0u) {
+            t_fail("stuck not detected, flags 0x%02X", bus_health_flags);
+        } else if (!bus_probe(BRIDGE_ADDR)) {
+            t_fail("stuck detected, target did not recover");
+        } else {
+            t_pass("detected, target responded after release");
+        }
+    }
+
+    t_start("T47", "health no false alarm");
+    {
+        uint8_t v;
+
+        (void)send_cmd(CMD_CLEAR_COUNTERS);
+        sleep_ms(10u);
+        for (int i = 0; i < 200; i++) {
+            (void)bus_read_reg(REG_FLAGS, &v, 1u);
+        }
+        if (!bus_health_sample()) {
+            t_fail("sample failed");
+        } else if (bus_health_flags != 0u) {
+            t_fail("flags 0x%02X under normal traffic", bus_health_flags);
+        } else {
+            t_pass("200 reads, no flags");
+        }
+    }
 }

@@ -17,6 +17,10 @@ Canonical description of the I2C slave register file exposed by
 | `0x05` | 1 | `REG_ERROR` | Last error code |
 | `0x06` | 2 | `REG_CYCLE` | Cycle counter, little-endian |
 | `0x08` | 1 | `REG_SEQ` | Publish seqlock: odd while updating, even when stable |
+| `0x0A` | 2 | `REG_FRAMES` | Matched I2C addresses, little-endian, wraps at 64K |
+| `0x0C` | 1 | `REG_HEALTH` | Sticky bus-health flags (see below) |
+| `0x0D` | 1 | `REG_ERR_BUS` | `BUSERR` count, saturates at 255 |
+| `0x0E` | 1 | `REG_ERR_ARL` | `ARLOST` count, saturates at 255 |
 | `0x0F` | 1 | `REG_SPEED` | `0` = 100 kHz, `1` = 400 kHz (writable) |
 | `0x10..0x2F` | 32 | `REG_TEMP` | 16 × `int16` raw temperature (1/16 °C), `0x8000` = invalid |
 | `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
@@ -54,12 +58,41 @@ the snapshot, then writes the next even value. A master should read
 `REG_SEQ`, read the map, read `REG_SEQ` again, and retry if the two differ
 or the value is odd. This detects a publish that overlaps the transfer.
 
+## Bus health (`0x0A..0x0E`)
+
+The slave cannot observe a NACK on its own address: if that frame is
+corrupted the address simply does not match and no flag is raised. What it
+can count is matched addresses, so the master compares its own transaction
+count with `REG_FRAMES` and the difference is the number of address phases
+the slave never saw.
+
+| Bit | Mask | Name | Meaning |
+|-----|------|------|---------|
+| 0 | `0x01` | `HEALTH_BUSERR` | Illegal START/STOP position seen |
+| 1 | `0x02` | `HEALTH_ARLOST` | Arbitration lost (noise or a second master) |
+| 2 | `0x04` | `HEALTH_OUF` | Receive overrun |
+| 3 | `0x08` | `HEALTH_SDA_STUCK` | SDA held low for 10 ms with no matched address |
+| 4 | `0x10` | `HEALTH_RECOVERED` | Nine-clock recovery released the bus |
+
+The flags are sticky. After `HEALTH_SDA_STUCK` the slave disables the I2C
+peripheral, drives nine clocks and a STOP on the pins in open-drain mode,
+then re-initialises the peripheral with the same speed and address. It only
+does this when SDA has been continuously low for 10 ms and no address
+matched in that window, so a live transfer is never disturbed. A low SCL is
+never treated as a fault: that is the slave's own clock stretch.
+
+`CMD_CLEAR_COUNTERS` clears the counters, the flags and `REG_FRAMES`.
+
 ## Writable registers
 
 Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`) and `REG_SELECTED` (`0x61`)
 accept writes. A write is latched at STOP and applied when the current
 transaction finishes; an aborted transfer (ACKFAIL/BUSERR/ARLOST/OUF)
 discards the pending command or speed change.
+
+The health block is read-only. Its values are injected when a byte is
+handed to the master, because `publish()` rebuilds `g_regs` from scratch on
+every 1-Wire cycle.
 
 Writes to every other address are ignored; the register pointer still
 advances, so a block write cannot modify the read-only snapshot.

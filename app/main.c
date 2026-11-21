@@ -38,6 +38,82 @@ volatile uint32_t g_i2c_err_bus;
 volatile uint32_t g_i2c_err_arl;
 volatile uint32_t g_i2c_err_ouf;
 
+/* Bus health, readable over I2C without a debugger.
+ *
+ * The slave cannot see a master NACK: if the address phase is corrupted the
+ * address simply does not match and no flag is raised.  What it can count is
+ * matched addresses, so the master compares its own transaction count with
+ * this counter and the difference is exactly the address-phase loss rate. */
+static uint16_t g_frames;           /* matched addresses, wraps at 64K */
+static uint8_t  g_health;           /* HEALTH_* sticky bits */
+static uint8_t  g_err_bus;          /* saturated BUSERR count */
+static uint8_t  g_err_arl;          /* saturated ARLOST count */
+static uint32_t g_ms;               /* 1 ms tick, polled from SysTick */
+static uint32_t g_scl_hz = 100000u; /* timing currently programmed */
+static uint32_t sda_low_since;
+static uint32_t last_recovery_ms;
+static bool     sda_low_seen;
+
+#define SDA_BIT                 0x00000002u
+#define SCL_BIT                 0x00000001u
+#define STUCK_MS                10u
+#define RECOVERY_RETRY_MS       100u
+
+static uint8_t sat_inc(uint8_t v)
+{
+    return (v == 0xFFu) ? v : (uint8_t)(v + 1u);
+}
+
+static void timebase_init(void)
+{
+    /* HCLK/8 counts a millisecond without any interrupt; the main loop reads
+     * COUNTFLAG, so a long blocking pass only delays detection, never advances
+     * the clock early. */
+    SysTick->LOAD = (clock_ahb_hz() / 8000u) - 1u;
+    SysTick->VAL = 0u;
+    SysTick->CTRL = 0x00000005u;    /* HCLK/8, enable, no tick interrupt */
+}
+
+static void timebase_poll(void)
+{
+    if ((SysTick->CTRL & 0x00010000u) != 0u) {
+        g_ms++;
+    }
+}
+
+/* Values that live outside the published snapshot: publish() memsets g_regs
+ * every 1-Wire cycle, so they are injected when the byte is handed to the
+ * master instead of being stored in the map. */
+static uint8_t reg_byte(uint32_t addr)
+{
+    switch (addr & 0xFFu) {
+    case REG_FRAMES_L:
+        return (uint8_t)(g_frames & 0xFFu);
+    case REG_FRAMES_H:
+        return (uint8_t)(g_frames >> 8);
+    case REG_HEALTH:
+        return g_health;
+    case REG_ERR_BUS:
+        return g_err_bus;
+    case REG_ERR_ARL:
+        return g_err_arl;
+    default:
+        return g_regs[addr & 0xFFu];
+    }
+}
+
+static void health_clear(void)
+{
+    g_frames = 0u;
+    g_health = 0u;
+    g_err_bus = 0u;
+    g_err_arl = 0u;
+    g_i2c_err_ack = 0u;
+    g_i2c_err_bus = 0u;
+    g_i2c_err_arl = 0u;
+    g_i2c_err_ouf = 0u;
+}
+
 bool manager_i2c_busy(void)
 {
     return (I2C2->sts2 & 0x00000002u) != 0u;
@@ -94,6 +170,7 @@ static void i2c_apply_speed(uint32_t scl_hz)
     I2C2->ctrl1_bit.stretch = 1;
 
     g_i2c_speed = (scl_hz > 100000u) ? 1u : 0u;
+    g_scl_hz = scl_hz;
 }
 
 static void i2c_hw_init(void)
@@ -111,7 +188,88 @@ static void i2c_hw_init(void)
     I2C2->oaddr1 = I2C_OADDR1;
     I2C2->oaddr1_bit.addr1mode = 0;
 
-    i2c_apply_speed(100000u);
+    i2c_apply_speed(g_scl_hz);
+}
+
+static void spin_us(uint32_t us)
+{
+    while (us-- != 0u) {
+        for (volatile uint32_t i = 0u; i < 60u; i++) {
+        }
+    }
+}
+
+/* Nine clocks and a STOP free a slave that was left mid-byte.  Called only
+ * after SDA has been idle-low for STUCK_MS with no matched address, so the
+ * master cannot be talking: driving the pins here is safe. */
+static void i2c_bus_recover(void)
+{
+    I2C2->ctrl1_bit.i2cen = 0;
+
+    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000066u;  /* OD output */
+    GPIOA->omode |= 0x00000003u;
+    spin_us(5u);
+
+    for (int i = 0; i < 9; i++) {
+        GPIOA->omode &= ~SCL_BIT;
+        spin_us(5u);
+        GPIOA->omode |= SCL_BIT;
+        spin_us(5u);
+    }
+
+    GPIOA->omode &= ~SDA_BIT;       /* STOP: SDA low, SCL high, SDA high */
+    spin_us(5u);
+    GPIOA->omode |= SCL_BIT;
+    spin_us(5u);
+    GPIOA->omode |= SDA_BIT;
+    spin_us(5u);
+
+    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x0000000Au;
+    GPIOA->omode |= 0x00000003u;
+
+    i2c_hw_init();
+
+    reg_ptr = 0u;
+    rx_mode = 0u;
+    tx_mode = 0u;
+    first_byte = 0u;
+    pending_cmd = 0u;
+    pending_speed = -1;
+    sda_low_seen = false;
+    last_recovery_ms = g_ms;
+
+    if ((GPIOA->idt & SDA_BIT) != 0u) {
+        g_health |= HEALTH_RECOVERED;
+    }
+}
+
+/* SDA held low outside any transaction means somebody, most likely this slave
+ * after an aborted byte, still owns the bus.  SCL is not checked: a low SCL is
+ * this slave's own clock stretch and perfectly legal.  STS2.busy is useless
+ * here because a master pulling SDA low is decoded as a START, so the only
+ * reliable evidence is SDA low for STUCK_MS with no matched address. */
+static void bus_health_poll(void)
+{
+    if ((GPIOA->idt & SDA_BIT) != 0u) {
+        sda_low_seen = false;
+        return;
+    }
+
+    if (!sda_low_seen) {
+        sda_low_seen = true;
+        sda_low_since = g_ms;
+        return;
+    }
+
+    if ((g_ms - sda_low_since) < STUCK_MS) {
+        return;
+    }
+    if ((g_ms - last_recovery_ms) < RECOVERY_RETRY_MS) {
+        return;
+    }
+
+    g_health |= HEALTH_SDA_STUCK;
+    i2c_bus_recover();
 }
 
 static void i2c_poll(void)
@@ -129,10 +287,13 @@ static void i2c_poll(void)
         (void)I2C2->sts1;
         (void)I2C2->sts2;
 
+        g_frames++;                 /* one matched address = one transaction */
+        sda_low_seen = false;
+
         if ((sts2 & STS2_DIRF) != 0u) {
             tx_mode = 1;
             rx_mode = 0;
-            I2C2->dt = g_regs[reg_ptr & 0xFFu];
+            I2C2->dt = reg_byte(reg_ptr);
             reg_ptr = (reg_ptr + 1u) & 0xFFu;
         } else {
             rx_mode = 1;
@@ -169,7 +330,7 @@ static void i2c_poll(void)
     }
 
     if ((tx_mode != 0u) && ((sts1 & STS1_TDBE) != 0u)) {
-        I2C2->dt = g_regs[reg_ptr & 0xFFu];
+        I2C2->dt = reg_byte(reg_ptr);
         reg_ptr = (reg_ptr + 1u) & 0xFFu;
         return;
     }
@@ -182,6 +343,9 @@ static void i2c_poll(void)
         first_byte = 0;
 
         if (pending_cmd != 0u) {
+            if (pending_cmd == 3u) {
+                health_clear();
+            }
             manager_command(pending_cmd);
             pending_cmd = 0;
         }
@@ -199,14 +363,19 @@ static void i2c_poll(void)
     }
     if ((sts1 & STS1_BUSERR) != 0u) {
         g_i2c_err_bus++;
+        g_err_bus = sat_inc(g_err_bus);
+        g_health |= HEALTH_BUSERR;
         I2C2->sts1 = (uint32_t)~(STS1_BUSERR & 0x0000DF00u);
     }
     if ((sts1 & STS1_ARLOST) != 0u) {
         g_i2c_err_arl++;
+        g_err_arl = sat_inc(g_err_arl);
+        g_health |= HEALTH_ARLOST;
         I2C2->sts1 = (uint32_t)~(STS1_ARLOST & 0x0000DF00u);
     }
     if ((sts1 & STS1_OUF) != 0u) {
         g_i2c_err_ouf++;
+        g_health |= HEALTH_OUF;
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
     }
     /* An aborted transfer must not leave a command or a speed change armed
@@ -223,12 +392,15 @@ static void i2c_poll(void)
 int main(void)
 {
     clock_config();
+    timebase_init();
     ow_hal_init();
     i2c_hw_init();
 
     manager_init();
 
     for (;;) {
+        timebase_poll();
+        bus_health_poll();
         i2c_poll();
         if (!i2c_active()) {
             manager_poll();

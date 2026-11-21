@@ -44,6 +44,25 @@ extern volatile uint32_t bus_err_nack;
 extern volatile uint32_t bus_err_other;
 void     bus_stats_reset(void);
 
+/* Bus health accounting.  The slave counts matched addresses; every address
+ * phase the master starts is counted here, so the difference is the number of
+ * transactions the slave never saw.  That is the only way to observe an
+ * address-phase loss, because a NACK on the address leaves no trace on the
+ * slave side. */
+extern volatile uint32_t bus_txn;
+extern volatile uint32_t bus_health_frames;
+extern volatile uint32_t bus_health_missed;
+extern volatile uint32_t bus_health_truncated;
+extern volatile uint8_t  bus_health_flags;
+extern volatile uint8_t  bus_health_err_bus;
+extern volatile uint8_t  bus_health_err_arl;
+
+bool     bus_health_sample(void);
+void     bus_health_reset(void);
+
+/* Hold SDA low from the master side for `ms`, then release and recover. */
+void     bus_hold_sda_low(uint32_t ms);
+
 /* Release a bus left in the middle of a repeated-start sequence. */
 void     bus_recover(void);
 

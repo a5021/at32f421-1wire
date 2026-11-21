@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+- **Bridge:** bus-health block at `0x0A..0x0E`: a 16-bit matched-address
+  counter (`REG_FRAMES`), sticky flags (`REG_HEALTH`: BUSERR, ARLOST, OUF,
+  SDA stuck, recovered), and saturating BUSERR/ARLOST counters. The master
+  compares its own transaction count with `REG_FRAMES`; the difference is the
+  address-phase loss rate, which the slave cannot observe any other way
+  because a NACK on its address raises no flag. `CMD_CLEAR_COUNTERS` clears
+  the block.
+- **Bridge:** self-recovery. If SDA stays low for 10 ms with no matched
+  address, the slave disables I2C, clocks nine times and issues a STOP in
+  open-drain mode, then re-initialises the peripheral at the same speed and
+  address. A low SCL is never treated as a fault because it is the slave's
+  own clock stretch.
+- **Tester:** `health [clear]` command and tests T43-T47 (frame accounting,
+  counter clear, loss-free accounting, stuck detection, no false alarm).
+  47 tests total.
+
 ### Fixed
 - **Engine:** every TMR1 pass now runs in one-cycle mode (OCMEN) and stops
   itself at its update event; CH3 compare is preloaded with `0` so the line

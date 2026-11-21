@@ -20,6 +20,11 @@ extern "C" {
 #define REG_CYCLE_L             0x06u
 #define REG_CYCLE_H             0x07u
 #define REG_SEQ                 0x08u
+#define REG_FRAMES_L            0x0Au
+#define REG_FRAMES_H            0x0Bu
+#define REG_HEALTH              0x0Cu
+#define REG_ERR_BUS             0x0Du
+#define REG_ERR_ARL             0x0Eu
 #define REG_SPEED               0x0Fu
 #define REG_TEMP                0x10u
 #define REG_TEMP_STATUS         0x30u
@@ -36,6 +41,14 @@ extern "C" {
 #define FLAG_SNAPSHOT           0x08u
 #define FLAG_EEPROM_OK          0x10u
 #define FLAG_TEMP_ERROR         0x20u
+
+/* REG_HEALTH sticky bits.  b0..b2 come from the I2C status flags, b3 from the
+ * line monitor, b4 records a successful nine-clock recovery. */
+#define HEALTH_BUSERR           0x01u
+#define HEALTH_ARLOST           0x02u
+#define HEALTH_OUF              0x04u
+#define HEALTH_SDA_STUCK        0x08u
+#define HEALTH_RECOVERED        0x10u
 
 #define DEV_MAX                 16u
 _Static_assert(REG_ROMS + 8u * DEV_MAX <= 256u, "ROM map overflows the register file");

@@ -18,11 +18,84 @@ volatile uint32_t bus_err_timeout;
 volatile uint32_t bus_err_nack;
 volatile uint32_t bus_err_other;
 
+volatile uint32_t bus_txn;
+volatile uint32_t bus_health_frames;
+volatile uint32_t bus_health_missed;
+volatile uint32_t bus_health_truncated;
+volatile uint8_t  bus_health_flags;
+volatile uint8_t  bus_health_err_bus;
+volatile uint8_t  bus_health_err_arl;
+
+static uint16_t frames_last;
+static bool     frames_primed;
+static uint32_t fail_base;
+
 void bus_stats_reset(void)
 {
     bus_err_timeout = 0u;
     bus_err_nack = 0u;
     bus_err_other = 0u;
+}
+
+static uint32_t failures_total(void)
+{
+    return bus_err_nack + bus_err_timeout + bus_err_other;
+}
+
+/* Read the whole health block in one transaction: frame counter, sticky flags
+ * and the two saturating error counters. */
+static bool health_read(uint8_t *b, size_t len)
+{
+    return bus_read_reg(REG_FRAMES_L, b, len) == (int)len;
+}
+
+bool bus_health_sample(void)
+{
+    uint8_t b[5];
+
+    if (!health_read(b, sizeof(b))) {
+        return false;
+    }
+
+    uint16_t now = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+
+    if (frames_primed) {
+        bus_health_frames += (uint16_t)(now - frames_last);
+    }
+    frames_last = now;
+    frames_primed = true;
+    bus_health_flags = b[2];
+    bus_health_err_bus = b[3];
+    bus_health_err_arl = b[4];
+
+    uint32_t failures = failures_total() - fail_base;
+
+    bus_health_missed = (bus_txn > bus_health_frames)
+                        ? bus_txn - bus_health_frames : 0u;
+    bus_health_truncated = (failures > bus_health_missed)
+                           ? failures - bus_health_missed : 0u;
+    return true;
+}
+
+void bus_health_reset(void)
+{
+    uint8_t b[5];
+
+    if (health_read(b, sizeof(b))) {
+        frames_last = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+        frames_primed = true;
+    } else {
+        frames_primed = false;
+    }
+
+    bus_txn = 0u;
+    bus_health_frames = 0u;
+    bus_health_missed = 0u;
+    bus_health_truncated = 0u;
+    bus_health_flags = 0u;
+    bus_health_err_bus = 0u;
+    bus_health_err_arl = 0u;
+    fail_base = failures_total();
 }
 
 static void count_err(int ret)
@@ -111,6 +184,22 @@ void bus_recover(void)
     gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
 }
 
+void bus_hold_sda_low(uint32_t ms)
+{
+    gpio_set_function(PIN_SDA, GPIO_FUNC_SIO);
+    gpio_set_dir(PIN_SDA, GPIO_OUT);
+    gpio_put(PIN_SDA, 0);
+    sleep_ms(ms);
+    gpio_put(PIN_SDA, 1);
+    gpio_set_dir(PIN_SDA, GPIO_IN);
+    busy_wait_us_32(100);
+
+    i2c_init(I2C_INST, current_speed);
+    gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
+    bus_recover();
+}
+
 bool bus_probe(uint8_t addr)
 {
     uint8_t b = 0u;
@@ -118,6 +207,9 @@ bool bus_probe(uint8_t addr)
 
     if (ret == PICO_ERROR_TIMEOUT) {
         bus_recover();
+    }
+    if (ret == 1) {
+        bus_txn++;
     }
     return ret == 1;
 }
@@ -133,6 +225,7 @@ static bool tx_reg(uint8_t reg, const uint8_t *data, size_t len, bool nostop)
         memcpy(&tx_buf[1], data, len);
     }
 
+    bus_txn++;
     int ret = i2c_write_timeout_us(I2C_INST, BRIDGE_ADDR, tx_buf, len + 1u,
                                    nostop, BUS_TIMEOUT_US);
     if (ret != (int)(len + 1u)) {
@@ -162,6 +255,7 @@ int bus_read_reg(uint8_t reg, uint8_t *buf, size_t len)
     /* Let the slave service STOPF before the next START. */
     busy_wait_us_32(50);
 
+    bus_txn++;
     int got = i2c_read_timeout_us(I2C_INST, BRIDGE_ADDR, buf, len, false,
                                   BUS_TIMEOUT_US);
     if (got != (int)len) {
@@ -181,6 +275,7 @@ int bus_read_reg_nostop(uint8_t reg, uint8_t *buf, size_t len)
         return -1;
     }
 
+    bus_txn++;
     int got = i2c_read_timeout_us(I2C_INST, BRIDGE_ADDR, buf, len, false,
                                   BUS_TIMEOUT_US);
     if (got != (int)len) {
@@ -192,6 +287,7 @@ int bus_read_reg_nostop(uint8_t reg, uint8_t *buf, size_t len)
 
 int bus_read_only(uint8_t *buf, size_t len)
 {
+    bus_txn++;
     int got = i2c_read_timeout_us(I2C_INST, BRIDGE_ADDR, buf, len, false,
                                   BUS_TIMEOUT_US);
 
@@ -314,7 +410,16 @@ bool write_speed(uint8_t value)
 
 bool send_cmd(uint8_t cmd)
 {
-    return bus_write_reg(REG_CMD, &cmd, 1u) == 1;
+    bool ok = bus_write_reg(REG_CMD, &cmd, 1u) == 1;
+
+    /* Clearing the slave counters invalidates the master-side baseline: the
+     * frame counter restarts at zero, so a stale baseline would look like a
+     * 64K wrap.  Re-prime immediately. */
+    if (ok && (cmd == CMD_CLEAR_COUNTERS)) {
+        bus_stats_reset();
+        bus_health_reset();
+    }
+    return ok;
 }
 
 bool select_sensor(uint8_t index)

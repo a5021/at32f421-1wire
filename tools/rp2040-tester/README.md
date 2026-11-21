@@ -48,7 +48,7 @@ and runs the full suite. Commands:
 
 ```
 run quick        T01-T34, about 40 s
-run full         T01-T42, about 3 min
+run full         T01-T47, about 3 min
 run soak N       full suite with the T36 soak extended to N seconds
 results          print the last results again
 abort            stop after the current test
@@ -68,6 +68,7 @@ cmd <n>          write REG_CMD
 select <n>       write REG_SELECTED
 probe <addr>     probe one I2C address
 recover          nine clocks and STOP on the I2C bus
+health [clear]   bus health: transactions, missed frames, sticky flags, verdict
 stress [n]       n map reads at the current link speed, with error counters
 sample [bytes]   measure SCL with PIO (kHz, min/med/max, stretch)
 bench            100 vs 400 kHz on a 64-byte read
@@ -167,11 +168,24 @@ the longest low gives the stretch.
 | T41 | 1000 alternating NACK/ACK transactions |
 | T42 | final map valid and cycle still advancing |
 
+### Bus health (T43-T47)
+
+The slave reports matched addresses and sticky error flags; the tester
+compares them with its own transaction count.
+
+| ID | Check |
+|----|-------|
+| T43 | 16 register reads advance the slave frame counter by 32-34 |
+| T44 | `CMD_CLEAR_COUNTERS` zeroes the frame counter and the flags |
+| T45 | 500 reads: transaction count equals matched frames, nothing missed |
+| T46 | SDA held low for 50 ms is detected as stuck, and the target answers after release |
+| T47 | 200 normal reads raise no health flag |
+
 ## Expected result on the 9-device bench
 
 ```
-T01 ... T42 PASS
-SUMMARY: 42/42 passed, 0 failed
+T01 ... T47 PASS
+SUMMARY: 47/47 passed, 0 failed
 RESULT: PASS
 ```
 

@@ -49,6 +49,7 @@ static uint64_t fail_next_us;
 static bool     adc_ready;
 
 static void seed_history(lineedit_t *le);
+static const char *health_verdict(void);
 
 static void led_poll(void)
 {
@@ -238,6 +239,13 @@ static void print_status(void)
                hdr[REG_FLAGS]);
     } else {
         printf("snapshot: unavailable\n");
+    }
+
+    if (ack && bus_health_sample()) {
+        printf("health: %s, %u txn, %u missed, %u truncated, flags 0x%02X\n",
+               health_verdict(), (unsigned)bus_txn,
+               (unsigned)bus_health_missed, (unsigned)bus_health_truncated,
+               bus_health_flags);
     }
 }
 
@@ -583,6 +591,60 @@ static void cmd_speed_auto(void)
     printf("400 kHz failed, using 100 kHz\n");
 }
 
+static const char *health_verdict(void)
+{
+    uint32_t bad = bus_health_missed + bus_health_truncated;
+
+    if ((bad == 0u) && (bus_health_flags == 0u)) {
+        return "CLEAN";
+    }
+    /* A stuck line, a real loss rate, or repeated bus errors are faults.  A
+     * single bus error in tens of thousands of transactions is noise. */
+    if (((bus_health_flags & HEALTH_SDA_STUCK) != 0u) ||
+        ((bus_txn != 0u) && (bad * 100u > bus_txn)) ||
+        (bus_health_err_bus >= 3u)) {
+        return "BAD";
+    }
+    return "DEGRADED";
+}
+
+static void cmd_health(const char *arg)
+{
+    if ((arg != NULL) && (strcmp(arg, "clear") == 0)) {
+        if (!send_cmd(CMD_CLEAR_COUNTERS)) {
+            printf("clear failed\n");
+            return;
+        }
+        bus_stats_reset();
+        bus_health_reset();
+        printf("health counters cleared\n");
+        return;
+    }
+
+    if (!bus_health_sample()) {
+        printf("health: read failed\n");
+        return;
+    }
+
+    uint32_t failures = bus_err_nack + bus_err_timeout + bus_err_other;
+    uint32_t per_mille = (bus_txn != 0u)
+                         ? (uint32_t)(((uint64_t)failures * 1000u) / bus_txn)
+                         : 0u;
+
+    printf("txn %u, slave frames %u, failures %u (%u.%u%%)\n",
+           (unsigned)bus_txn, (unsigned)bus_health_frames, (unsigned)failures,
+           (unsigned)(per_mille / 10u), (unsigned)(per_mille % 10u));
+    printf("  missed %u, truncated %u, buserr %u, arlost %u, flags 0x%02X%s%s%s%s%s\n",
+           (unsigned)bus_health_missed, (unsigned)bus_health_truncated,
+           bus_health_err_bus, bus_health_err_arl, bus_health_flags,
+           (bus_health_flags & HEALTH_BUSERR) ? " buserr" : "",
+           (bus_health_flags & HEALTH_ARLOST) ? " arlost" : "",
+           (bus_health_flags & HEALTH_OUF) ? " ouf" : "",
+           (bus_health_flags & HEALTH_SDA_STUCK) ? " sda-stuck" : "",
+           (bus_health_flags & HEALTH_RECOVERED) ? " recovered" : "");
+    printf("verdict: %s\n", health_verdict());
+}
+
 static void cmd_watch(const char *arg)
 {
     const char *what = ((arg != NULL) && (arg[0] != '\0')) ? arg : "status";
@@ -657,7 +719,8 @@ static void cmd_adc(void)
 static const char *const seed_commands[] = {
     "bootsel", "adc", "watch temp", "bench", "sample", "dump", "roms",
     "eeprom", "scratch 0", "select 0", "cmd 1", "reg 0x00", "probe 0x42",
-    "recover", "stress 1000", "scan", "ping", "speed auto", "speed 400", "speed 100", "rescan",
+    "recover", "health", "health clear", "stress 1000", "scan", "ping",
+    "speed auto", "speed 400", "speed 100", "rescan",
     "info", "results", "run soak 60", "run full", "run quick", "help",
     "?", "temp"
 };
@@ -712,6 +775,7 @@ static const cmd_desc_t command_table[] = {
     { "select", "select <n>", "write REG_SELECTED" },
     { "probe", "probe <addr>", "probe one I2C address" },
     { "recover", "recover", "nine clocks and STOP on the I2C bus" },
+    { "health", "health [clear]", "bus health: transactions, losses, flags" },
     { "sample", "sample [bytes]", "measure SCL with PIO" },
     { "bench", "bench", "100 vs 400 kHz read time" },
     { "watch", "watch temp|status|cycle", "1 Hz display until a key" },
@@ -874,6 +938,10 @@ static void handle_line(char *line)
         printf("bus recovery done\n");
         return;
     }
+    if (strcmp(cmd, "health") == 0) {
+        cmd_health(arg);
+        return;
+    }
     if (strcmp(cmd, "sample") == 0) {
         cmd_sample(arg);
         return;
@@ -972,6 +1040,7 @@ int main(void)
     gpio_put(LED_PIN, 0);
 
     bus_init();
+    bus_health_reset();
     scl_probe_init(SAMPLER_PIN);
 
     for (int i = 0; i < 30 && !stdio_usb_connected(); i++) {
