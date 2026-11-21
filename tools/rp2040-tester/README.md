@@ -210,6 +210,10 @@ RESULT: PASS
 T09 should report about 400 kHz with a 1.5-1.9 us low phase; T35 about 10 000
 good reads and a maximum single read near 6 ms.
 
+Acceptance on the bench: `run soak 1800` gives about 270 000 map reads
+(1.6 MB per minute) with 0 invalid and about 0.02 % retried reads, max
+latency 6.5 ms, and `health` reports CLEAN afterwards.
+
 ## Manual checks
 
 - Power the AT32 board off: the tester must finish the current test with a
