@@ -582,6 +582,32 @@ bool bus_bb_truncate(uint8_t addr7, uint8_t reg, int data_bits)
     return ack;
 }
 
+/* Write a register with one bit of the data byte flipped, so the slave sees a
+ * valid frame carrying a corrupted value. */
+bool bus_bb_corrupt_write(uint8_t addr7, uint8_t reg, uint8_t value,
+                          int flip_bit)
+{
+    uint8_t v = value;
+
+    if ((flip_bit >= 0) && (flip_bit < 8)) {
+        v ^= (uint8_t)(1u << flip_bit);
+    }
+
+    bb_begin();
+    bus_txn++;
+    bb_start();
+    bool ack = bb_byte((uint8_t)(addr7 << 1));
+    if (ack) {
+        ack = bb_byte(reg);
+    }
+    if (ack) {
+        (void)bb_byte(v);
+    }
+    bb_stop();
+    bb_end();
+    return ack;
+}
+
 void bus_bb_extra_clock(void)
 {
     bb_begin();

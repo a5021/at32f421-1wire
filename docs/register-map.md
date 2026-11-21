@@ -149,7 +149,12 @@ DS18B20 count publishes `0xFF` in all nine scratchpad bytes instead of a
 stale scratchpad.
 `REG_CMD` is queued: if the manager is busy, the command runs when the
 current cycle reaches its idle state, and a later command overwrites a
-still-pending one.
+still-pending one. Only `1`, `2` and `3` are acted on; any other value is
+ignored. A command byte corrupted in flight is **not detectable** because
+`REG_CMD` is excluded from the map CRC, but the blast radius is bounded:
+unknown commands do nothing, `REG_SPEED` accepts only `0`/`1`, and
+`REG_SELECTED` masks to the low nibble and falls back to the invalid
+scratchpad marker when out of range (T55).
 
 ## Source of truth
 

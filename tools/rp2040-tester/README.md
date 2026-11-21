@@ -48,7 +48,7 @@ and runs the full suite. Commands:
 
 ```
 run quick        T01-T34, about 40 s
-run full         T01-T54, about 3 min
+run full         T01-T55, about 3 min
 run soak N       full suite with the T36 soak extended to N seconds
 results          print the last results again
 abort            stop after the current test
@@ -197,12 +197,13 @@ see them.
 | T52 | one extra clock on the bus leaves the map intact |
 | T53 | 400 seeded mixed operations, no invariant failure |
 | T54 | the same seed replays the same digest |
+| T55 | corrupted writes: unknown command and speed ignored, out-of-range selection bounded |
 
 ## Expected result on the 9-device bench
 
 ```
-T01 ... T54 PASS
-SUMMARY: 54/54 passed, 0 failed
+T01 ... T55 PASS
+SUMMARY: 55/55 passed, 0 failed
 RESULT: PASS
 ```
 

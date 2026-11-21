@@ -51,8 +51,15 @@ int fuzz_run(uint32_t seed, uint32_t ops, uint32_t *digest)
         case 0: {
             uint8_t map[256];
             char why[80];
+            bool valid = false;
 
-            if (!(map_stable(map, 3000u) && map_validate(map, why, sizeof(why)))) {
+            /* One corrupted frame is exactly what the protocol tolerates by
+             * re-reading, so require recovery within two attempts. */
+            for (int attempt = 0; (attempt < 2) && !valid; attempt++) {
+                valid = map_stable(map, 3000u) &&
+                        map_validate(map, why, sizeof(why));
+            }
+            if (!valid) {
                 fails++;
                 fuzz_ops_failed[op]++;
             }
@@ -258,6 +265,80 @@ void suite_fault(void)
         } else {
             t_fail("digest %08X/%08X, fails %d/%d", (unsigned)d1, (unsigned)d2,
                    f1, f2);
+        }
+    }
+
+    t_start("T55", "corrupt writes");
+    {
+        uint8_t map[256];
+        char why[80];
+        uint8_t speed0 = 0xFF;
+        uint8_t speed1 = 0xFF;
+        uint8_t sp[9] = { 0 };
+        bool ok = map_stable(map, 3000u) && map_validate(map, why, sizeof(why));
+
+        if (ok) {
+            ok = bus_read_reg(REG_SPEED, &speed0, 1u) == 1;
+        }
+
+        /* Unknown command (3 with bit 4 flipped = 0x13) must be ignored. */
+        if (ok) {
+            ok = bus_bb_corrupt_write(BRIDGE_ADDR, REG_CMD, CMD_CLEAR_COUNTERS,
+                                      4);
+            sleep_ms(30u);
+        }
+        /* Out-of-range speed (1 with bit 3 flipped = 0x09) must be ignored. */
+        if (ok) {
+            ok = bus_bb_corrupt_write(BRIDGE_ADDR, REG_SPEED, 1u, 3);
+            sleep_ms(30u);
+        }
+        if (ok) {
+            ok = bus_read_reg(REG_SPEED, &speed1, 1u) == 1;
+        }
+        /* Selection 0x0F with bit 3 flipped = 0x07: outside the sensor table,
+         * so the published scratchpad must be the invalid marker.  The
+         * scratchpad is republished once per cycle, hence the wait. */
+        if (ok) {
+            uint8_t raw[2] = { 0, 0 };
+
+            ok = bus_read_reg(REG_CYCLE_L, raw, 2u) == 2;
+            uint16_t cycle = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
+
+            if (ok) {
+                ok = bus_bb_corrupt_write(BRIDGE_ADDR, REG_SELECTED, 0x0Fu, 3);
+            }
+            if (ok) {
+                ok = map_wait_cycle(cycle, map, 4000u);
+            }
+            if (ok) {
+                ok = bus_read_reg(REG_SCRATCH, sp, sizeof(sp)) ==
+                     (int)sizeof(sp);
+            }
+        }
+
+        (void)select_sensor(0u);
+
+        if (!ok) {
+            t_fail("injection failed");
+        } else if (speed0 > 1u) {
+            t_fail("speed readback %u", speed0);
+        } else if (speed1 != speed0) {
+            t_fail("speed changed %u -> %u", speed0, speed1);
+        } else {
+            bool all_ff = true;
+
+            for (int i = 0; i < 9; i++) {
+                if (sp[i] != 0xFFu) {
+                    all_ff = false;
+                }
+            }
+            if (!all_ff) {
+                t_fail("selection 7 published a real scratchpad");
+            } else if (!fuzz_alive()) {
+                t_fail("bridge not healthy after corrupted writes");
+            } else {
+                t_pass("unknown cmd and speed ignored, selection bounded");
+            }
         }
     }
 

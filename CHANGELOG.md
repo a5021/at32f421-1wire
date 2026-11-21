@@ -15,7 +15,8 @@
 - **Tester:** `fault <code>` and seeded `fuzz [ops] [seed]`, plus T48-T54:
   host-side bit-banged address corruption, frame-count ground truth, map-CRC
   detection of a flipped bit, dropped-byte handling, extra-clock tolerance,
-  400 mixed operations and a seed replay. 54 tests total.
+  corrupted command/speed/selection writes, 400 mixed operations and a seed
+  replay. 55 tests total.
 - **Bridge:** bus-health block at `0x09..0x0E`: a 32-bit matched-address
   counter (`REG_FRAMES`), sticky flags (`REG_HEALTH`: BUSERR, ARLOST, OUF,
   SDA stuck, recovered), and a saturating BUSERR counter. The master
