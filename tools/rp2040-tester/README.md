@@ -48,7 +48,7 @@ and runs the full suite. Commands:
 
 ```
 run quick        T01-T34, about 40 s
-run full         T01-T47, about 3 min
+run full         T01-T54, about 3 min
 run soak N       full suite with the T36 soak extended to N seconds
 results          print the last results again
 abort            stop after the current test
@@ -69,6 +69,8 @@ select <n>       write REG_SELECTED
 probe <addr>     probe one I2C address
 recover          nine clocks and STOP on the I2C bus
 health [clear]   bus health: transactions, missed frames, sticky flags, verdict
+fault <code>      arm one REG_FAULT code (1, 3, 4, 5)
+fuzz [ops] [seed] inject faults on both sides with a reproducible seed
 stress [n]       n map reads at the current link speed, with error counters
 sample [bytes]   measure SCL with PIO (kHz, min/med/max, stretch)
 bench            100 vs 400 kHz on a 64-byte read
@@ -181,11 +183,26 @@ compares them with its own transaction count.
 | T46 | SDA held low for 50 ms is detected as stuck, and the target answers after release |
 | T47 | 200 normal reads raise no health flag |
 
+### Fault injection (T48-T54)
+
+The tester injects faults from both sides and checks that the diagnostics
+see them.
+
+| ID | Check |
+|----|-------|
+| T48 | 32 bit-banged address corruptions land as exactly 32 missed frames |
+| T49 | 8 dropped + 8 phantom frame counts move the counter by exactly that |
+| T50 | a flipped bit in the map is rejected by `REG_MAP_CRC` |
+| T51 | a dropped byte shifts the stream and the next read is clean |
+| T52 | one extra clock on the bus leaves the map intact |
+| T53 | 400 seeded mixed operations, no invariant failure |
+| T54 | the same seed replays the same digest |
+
 ## Expected result on the 9-device bench
 
 ```
-T01 ... T47 PASS
-SUMMARY: 47/47 passed, 0 failed
+T01 ... T54 PASS
+SUMMARY: 54/54 passed, 0 failed
 RESULT: PASS
 ```
 

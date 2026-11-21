@@ -10,7 +10,7 @@ Canonical description of the I2C slave register file exposed by
 | Address | Size | Name | Meaning |
 |---------|------|------|---------|
 | `0x00` | 1 | `REG_MAGIC` | `0x5A` — sanity byte the master should check first |
-| `0x01` | 1 | `REG_VERSION` | Firmware version, `0x02` |
+| `0x01` | 1 | `REG_VERSION` | Firmware version, `0x03` |
 | `0x02` | 1 | `REG_FLAGS` | Status flags (see below) |
 | `0x03` | 1 | `REG_DEVICES` | Total devices found by search (may exceed 16) |
 | `0x04` | 1 | `REG_DS18B20` | DS18B20 count (may exceed 16) |
@@ -27,6 +27,8 @@ Canonical description of the I2C slave register file exposed by
 | `0x48` | 1 | `REG_EEPROM_STATUS` | DS2431 status (`0x00` = OK, `0xFF` = invalid) |
 | `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters (writable) |
 | `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed (writable) |
+| `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
+| `0x63` | 2 | `REG_MAP_CRC` | CRC-16/CCITT over the snapshot, little-endian |
 | `0x70..0x78` | 9 | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
 | `0x80..0xFF` | 128 | `REG_ROMS` | 16 × 8-byte ROM table |
 
@@ -89,12 +91,51 @@ never treated as a fault: that is the slave's own clock stretch.
 
 `CMD_CLEAR_COUNTERS` clears the counters, the flags and `REG_FRAMES`.
 
+## Fault injection (`REG_FAULT`)
+
+`REG_FAULT` accepts one code per write and fires once, on the next
+transaction. It exists so a test can prove that corruption is detected
+rather than silently accepted.
+
+| Code | Effect |
+|------|--------|
+| 1 | invert bit 0 of the next transmitted byte |
+| 2 | reserved (a long SCL stretch is not reliable on this slave) |
+| 3 | drop the next byte from the stream |
+| 4 | count one extra frame |
+| 5 | drop one frame count |
+
+Codes 4 and 5 give a digital ground truth for the health metric: the master
+knows exactly how many frames were injected and can check that
+`REG_FRAMES` moved by the same amount.
+
+## Map checksum (`REG_MAP_CRC`)
+
+CRC-16/CCITT-FALSE (poly `0x1021`, init `0xFFFF`) over the snapshot, stored
+little-endian. It is computed by `publish()` and lets the master detect a
+corrupted byte in flight: I2C has no link CRC, so without this a single
+flipped bit in a temperature would look like a plausible reading.
+
+The following bytes are excluded and must be zeroed by the master before
+computing the same CRC:
+
+| Bytes | Why |
+|-------|-----|
+| `0x02` | `REG_FLAGS`: the busy bit toggles outside `publish()` |
+| `0x08` | `REG_SEQ`: intentionally odd while a publish is in progress |
+| `0x09..0x0F` | health block and `REG_SPEED`, injected at read time |
+| `0x60..0x64` | command latch, selection, fault and the CRC itself |
+
+Everything else (header counts, temperatures, statuses, EEPROM block,
+scratchpad, ROM table) changes only inside `publish()`, so a stable `REG_SEQ`
+guarantees the CRC matches.
+
 ## Writable registers
 
-Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`) and `REG_SELECTED` (`0x61`)
-accept writes. A write is latched at STOP and applied when the current
-transaction finishes; an aborted transfer (ACKFAIL/BUSERR/ARLOST/OUF)
-discards the pending command or speed change.
+Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`), `REG_SELECTED` (`0x61`) and
+`REG_FAULT` (`0x62`) accept writes. A write is latched at STOP and applied
+when the current transaction finishes; an aborted transfer
+(ACKFAIL/BUSERR/ARLOST/OUF) discards the pending command or speed change.
 
 The health block is read-only. Its values are injected when a byte is
 handed to the master, because `publish()` rebuilds `g_regs` from scratch on

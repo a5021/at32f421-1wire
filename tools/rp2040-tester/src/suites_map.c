@@ -24,7 +24,7 @@ void suite_map(void)
 
     t_start("T12", "magic + version");
     if (map_stable(map, 3000u) &&
-        (map[REG_MAGIC] == 0x5Au) && (map[REG_VERSION] == 2u)) {
+        (map[REG_MAGIC] == 0x5Au) && (map[REG_VERSION] == BRIDGE_VERSION)) {
         t_pass("0x5A v1");
     } else {
         t_fail("bad header");

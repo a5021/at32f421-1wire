@@ -5,7 +5,28 @@
 #include <string.h>
 
 #include "crc8.h"
+#include "crc16.h"
 #include "regmap.h"
+
+uint16_t map_crc16(const uint8_t *map)
+{
+    uint16_t crc = 0xFFFFu;
+
+    for (int i = 0; i < 256; i++) {
+        if ((i == (int)REG_FLAGS) || (i == (int)REG_SEQ) ||
+            ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
+            ((i >= (int)REG_CMD) && (i <= (int)REG_MAP_CRC_H))) {
+            continue;
+        }
+        crc ^= (uint16_t)((uint16_t)map[i] << 8);
+        for (int b = 0; b < 8; b++) {
+            crc = ((crc & 0x8000u) != 0u)
+                  ? (uint16_t)((uint16_t)(crc << 1) ^ 0x1021u)
+                  : (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
 
 test_result_t g_results[MAX_RESULTS];
 int           g_result_count;
@@ -108,6 +129,14 @@ bool map_validate(const uint8_t *map, char *why, size_t why_len)
     }
     if ((map[REG_FLAGS] & FLAG_SNAPSHOT) == 0u) {
         REJECT("snapshot flag clear");
+    }
+
+    uint16_t crc = map_crc16(map);
+    uint16_t crc_stored = (uint16_t)(map[REG_MAP_CRC_L] |
+                                     ((uint16_t)map[REG_MAP_CRC_H] << 8));
+
+    if (crc != crc_stored) {
+        REJECT("map crc %04X != %04X", crc, crc_stored);
     }
 
     int devices = map[REG_DEVICES];

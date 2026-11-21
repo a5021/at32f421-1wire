@@ -36,6 +36,8 @@ void suite_bus(void);
 void suite_map(void);
 void suite_ow(void);
 void suite_stress(void);
+void suite_fault(void);
+int  fuzz_run(uint32_t seed, uint32_t ops, uint32_t *digest);
 void stress_run(uint32_t count);
 
 static lineedit_t editor;
@@ -608,6 +610,41 @@ static const char *health_verdict(void)
     return "DEGRADED";
 }
 
+static void cmd_fault(const char *arg)
+{
+    uint8_t code = (uint8_t)strtoul(arg, NULL, 0);
+
+    if (bus_fault(code)) {
+        printf("fault %u armed\n", code);
+    } else {
+        printf("fault %u not armed\n", code);
+    }
+}
+
+static void cmd_fuzz(const char *arg)
+{
+    uint32_t ops = 200u;
+    uint32_t seed = time_us_32();
+    uint32_t digest = 0u;
+
+    if ((arg != NULL) && (arg[0] != '\0')) {
+        ops = (uint32_t)strtoul(arg, NULL, 10);
+        if (ops == 0u) {
+            ops = 200u;
+        }
+        const char *p = strchr(arg, ' ');
+
+        if (p != NULL) {
+            seed = (uint32_t)strtoul(p + 1, NULL, 0);
+        }
+    }
+
+    printf("fuzz %u ops, seed 0x%08X\n", (unsigned)ops, (unsigned)seed);
+    int fails = fuzz_run(seed, ops, &digest);
+
+    printf("digest 0x%08X, %d invariant failures\n", (unsigned)digest, fails);
+}
+
 static void cmd_health(const char *arg)
 {
     if ((arg != NULL) && (strcmp(arg, "clear") == 0)) {
@@ -719,7 +756,8 @@ static void cmd_adc(void)
 static const char *const seed_commands[] = {
     "bootsel", "adc", "watch temp", "bench", "sample", "dump", "roms",
     "eeprom", "scratch 0", "select 0", "cmd 1", "reg 0x00", "probe 0x42",
-    "recover", "health", "health clear", "stress 1000", "scan", "ping",
+    "recover", "health", "health clear", "fuzz", "fuzz 500 0xC0FFEE",
+    "stress 1000", "scan", "ping",
     "speed auto", "speed 400", "speed 100", "rescan",
     "info", "results", "run soak 60", "run full", "run quick", "help",
     "?", "temp"
@@ -776,6 +814,8 @@ static const cmd_desc_t command_table[] = {
     { "probe", "probe <addr>", "probe one I2C address" },
     { "recover", "recover", "nine clocks and STOP on the I2C bus" },
     { "health", "health [clear]", "bus health: transactions, losses, flags" },
+    { "fuzz", "fuzz [ops] [seed]", "inject faults on both sides, seeded" },
+    { "fault", "fault <code>", "arm one REG_FAULT code (1..5)" },
     { "sample", "sample [bytes]", "measure SCL with PIO" },
     { "bench", "bench", "100 vs 400 kHz read time" },
     { "watch", "watch temp|status|cycle", "1 Hz display until a key" },
@@ -825,6 +865,9 @@ static int run_all(bool stress)
     }
     if (!g_abort && stress) {
         suite_stress();
+    }
+    if (!g_abort) {
+        suite_fault();
     }
 
     running = false;
@@ -940,6 +983,14 @@ static void handle_line(char *line)
     }
     if (strcmp(cmd, "health") == 0) {
         cmd_health(arg);
+        return;
+    }
+    if (strcmp(cmd, "fuzz") == 0) {
+        cmd_fuzz(arg);
+        return;
+    }
+    if (strcmp(cmd, "fault") == 0) {
+        cmd_fault(arg);
         return;
     }
     if (strcmp(cmd, "sample") == 0) {

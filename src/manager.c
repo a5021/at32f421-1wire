@@ -78,7 +78,7 @@ void manager_init(void)
 {
     memset((void *)g_regs, 0, sizeof(g_regs));
     g_regs[REG_MAGIC] = 0x5Au;
-    g_regs[REG_VERSION] = 0x02u;
+    g_regs[REG_VERSION] = 0x03u;
     ds18b20_init(&sensor, true);
     ds2431_init(&eeprom);
     clear_results();
@@ -102,10 +102,33 @@ static void clear_results(void)
     err_count = 0u;
 }
 
+/* CRC16-CCITT over the published snapshot, skipping the bytes the bridge
+ * injects live (health) and the CRC field itself.  The master zeroes the same
+ * bytes before checking, so a single flipped bit anywhere in the snapshot is
+ * detectable instead of silently becoming a plausible temperature. */
+static uint16_t map_crc(void)
+{
+    uint16_t crc = 0xFFFFu;
+
+    for (uint32_t i = 0u; i < 256u; i++) {
+        if ((i == REG_FLAGS) || (i == REG_SEQ) ||
+            ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
+            ((i >= REG_CMD) && (i <= REG_MAP_CRC_H))) {
+            continue;
+        }
+        crc ^= (uint16_t)((uint16_t)g_regs[i] << 8);
+        for (int b = 0; b < 8; b++) {
+            crc = ((crc & 0x8000u) != 0u)
+                  ? (uint16_t)((uint16_t)(crc << 1) ^ 0x1021u)
+                  : (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
 static void publish(void)
 {
     uint8_t flags = FLAG_SNAPSHOT | FLAG_SEARCH_DONE;
-
     if (search_error != 0u) {
         flags |= FLAG_SEARCH_ERROR;
     }
@@ -119,7 +142,7 @@ static void publish(void)
     g_regs[REG_SEQ] = ++pub_seq;        /* odd: update in progress */
     cycle++;
     g_regs[REG_MAGIC] = 0x5Au;
-    g_regs[REG_VERSION] = 0x02u;
+    g_regs[REG_VERSION] = 0x03u;
     g_regs[REG_FLAGS] = flags;
     g_regs[REG_DEVICES] = (uint8_t)((device_count > 255u) ? 255u : device_count);
     g_regs[REG_DS18B20] = (uint8_t)((ds18b20_count > 255u) ? 255u : ds18b20_count);
@@ -161,6 +184,10 @@ static void publish(void)
         }
         roms_dirty = 0u;
     }
+    uint16_t crc = map_crc();
+
+    g_regs[REG_MAP_CRC_L] = (uint8_t)(crc & 0xFFu);
+    g_regs[REG_MAP_CRC_H] = (uint8_t)(crc >> 8);
     g_regs[REG_SEQ] = ++pub_seq;        /* even: snapshot stable */
 }
 

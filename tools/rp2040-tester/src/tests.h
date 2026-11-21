@@ -32,4 +32,7 @@ bool map_validate(const uint8_t *map, char *why, size_t why_len);
 int  map_stored_devices(const uint8_t *map);
 bool map_rom_equal(const uint8_t *a, const uint8_t *b);
 
+/* CRC16 over the snapshot with the live-injected bytes skipped, exactly as
+ * the bridge computes it. */
+uint16_t map_crc16(const uint8_t *map);
 #endif /* TESTER_TESTS_H */

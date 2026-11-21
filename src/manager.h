@@ -30,6 +30,9 @@ extern "C" {
 #define REG_EEPROM_STATUS       0x48u
 #define REG_CMD                 0x60u
 #define REG_SELECTED            0x61u
+#define REG_FAULT               0x62u
+#define REG_MAP_CRC_L           0x63u
+#define REG_MAP_CRC_H           0x64u
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 
@@ -47,6 +50,13 @@ extern "C" {
 #define HEALTH_OUF              0x04u
 #define HEALTH_SDA_STUCK        0x08u
 #define HEALTH_RECOVERED        0x10u
+
+/* REG_FAULT codes: one shot, applied to the next transmitted byte. */
+#define FAULT_BIT_FLIP          1u
+#define FAULT_STRETCH           2u      /* reserved: not reliable on this slave */
+#define FAULT_SKIP_BYTE         3u
+#define FAULT_EXTRA_FRAME       4u
+#define FAULT_DROP_FRAME        5u
 
 #define DEV_MAX                 16u
 _Static_assert(REG_ROMS + 8u * DEV_MAX <= 256u, "ROM map overflows the register file");

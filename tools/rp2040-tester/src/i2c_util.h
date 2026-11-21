@@ -39,6 +39,17 @@ bool     send_cmd(uint8_t cmd);
 bool     select_sensor(uint8_t index);
 bool     read_scratch(uint8_t *dst9);
 
+/* One-shot slave fault injection through REG_FAULT. */
+bool     bus_fault(uint8_t code);
+
+/* Bit-banged fault injection on the same pins.  The address phase is sent with
+ * one address bit inverted, or a write frame is cut short after `data_bits`
+ * bits of its data byte.  The bus is returned to the I2C peripheral and
+ * recovered before returning. */
+bool     bus_bb_corrupt_addr(uint8_t addr7, int flip_bit);
+bool     bus_bb_truncate(uint8_t addr7, uint8_t reg, int data_bits);
+void     bus_bb_extra_clock(void);
+
 extern volatile uint32_t bus_err_timeout;
 extern volatile uint32_t bus_err_nack;
 extern volatile uint32_t bus_err_other;

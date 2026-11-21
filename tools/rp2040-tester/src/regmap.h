@@ -25,6 +25,9 @@
 #define REG_EEPROM_STATUS       0x48u
 #define REG_CMD                 0x60u
 #define REG_SELECTED            0x61u
+#define REG_FAULT               0x62u
+#define REG_MAP_CRC_L           0x63u
+#define REG_MAP_CRC_H           0x64u
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 
@@ -46,6 +49,15 @@
 #define CMD_RESCAN              1u
 #define CMD_REREAD_EEPROM       2u
 #define CMD_CLEAR_COUNTERS      3u
+
+/* REG_FAULT codes, one shot. */
+#define FAULT_BIT_FLIP          1u
+#define FAULT_STRETCH           2u
+#define FAULT_SKIP_BYTE         3u
+#define FAULT_EXTRA_FRAME       4u
+#define FAULT_DROP_FRAME        5u
+
+#define BRIDGE_VERSION          3u
 
 #define FAMILY_DS18B20          0x28u
 #define FAMILY_DS2431           0x2Du

@@ -15,7 +15,8 @@ The master sends `[reg_addr, data_byte, ...]`. The first byte after the
 address+W is the register pointer; subsequent bytes are written to consecutive
 registers (pointer auto-increments, wraps at 0xFF).
 
-Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`) and `REG_SELECTED` (`0x61`) are
+Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`), `REG_SELECTED` (`0x61`) and
+`REG_FAULT` (`0x62`) are
 writable; writes to any other address are ignored and the pointer still
 advances. The value is **latched at STOP** and applied when the current
 transaction finishes — it is **not** applied immediately on the byte write. An

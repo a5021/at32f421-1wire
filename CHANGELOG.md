@@ -3,15 +3,27 @@
 ## Unreleased
 
 ### Added
+- **Bridge:** CRC-16/CCITT (`REG_MAP_CRC`, `0x63`) over the published
+  snapshot. I2C has no link CRC, so without it a flipped bit in a
+  temperature read as a plausible value. The master zeroes the live and
+  control bytes (`0x02`, `0x08`, `0x09..0x0F`, `0x60..0x64`) before checking.
+  `REG_VERSION` is now `0x03`.
+- **Bridge:** one-shot fault injection through `REG_FAULT` (`0x62`): bit
+  flip, dropped byte, extra frame, dropped frame. Frames are counted at the
+  address match and the injection is committed at STOP, so it applies to the
+  next transaction and never leaks.
+- **Tester:** `fault <code>` and seeded `fuzz [ops] [seed]`, plus T48-T54:
+  host-side bit-banged address corruption, frame-count ground truth, map-CRC
+  detection of a flipped bit, dropped-byte handling, extra-clock tolerance,
+  400 mixed operations and a seed replay. 54 tests total.
 - **Bridge:** bus-health block at `0x09..0x0E`: a 32-bit matched-address
   counter (`REG_FRAMES`), sticky flags (`REG_HEALTH`: BUSERR, ARLOST, OUF,
   SDA stuck, recovered), and a saturating BUSERR counter. The master
   compares its own transaction count with `REG_FRAMES`; the difference is the
   address-phase loss rate, which the slave cannot observe any other way
   because a NACK on its address raises no flag. `CMD_CLEAR_COUNTERS` clears
-  the block. The counter is 32 bits and only changes at an address match, so
-  it is read without wrap logic and without a seqlock. `REG_VERSION` is now
-  `0x02`.
+  the block. The counter only changes at an address match, so it is read
+  without wrap logic and without a seqlock.
 - **Bridge:** self-recovery. If SDA stays low for 10 ms with no matched
   address, the slave disables I2C, clocks nine times and issues a STOP in
   open-drain mode, then re-initialises the peripheral at the same speed and

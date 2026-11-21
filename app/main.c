@@ -33,6 +33,13 @@ static uint32_t first_byte;
 static int      pending_speed = -1;
 static uint8_t  pending_cmd;
 
+/* One-shot fault injection, armed through REG_FAULT.  Used by the tester to
+ * prove that a corrupted byte, a skipped byte or a miscounted frame is caught
+ * instead of silently accepted. */
+static uint8_t fault_next;          /* armed for the next transmitted byte */
+static uint8_t fault_pending;       /* written during the current transaction */
+static uint8_t fault_drop_frame;
+
 volatile uint32_t g_i2c_err_ack;
 volatile uint32_t g_i2c_err_bus;
 volatile uint32_t g_i2c_err_arl;
@@ -73,7 +80,7 @@ static void timebase_init(void)
      * the clock early. */
     SysTick->LOAD = (clock_ahb_hz() / 8000u) - 1u;
     SysTick->VAL = 0u;
-    SysTick->CTRL = 0x00000005u;    /* HCLK/8, enable, no tick interrupt */
+    SysTick->CTRL = 0x00000001u;    /* HCLK/8, enable, no tick interrupt */
 }
 
 static void timebase_poll(void)
@@ -115,6 +122,27 @@ static void health_clear(void)
     g_i2c_err_bus = 0u;
     g_i2c_err_arl = 0u;
     g_i2c_err_ouf = 0u;
+    fault_next = 0u;
+    fault_pending = 0u;
+    fault_drop_frame = 0u;
+}
+
+static void fault_apply(uint8_t code)
+{
+    switch (code) {
+    case FAULT_EXTRA_FRAME:
+        g_frames++;                 /* phantom frame: master must clamp */
+        break;
+    case FAULT_DROP_FRAME:
+        fault_drop_frame = 1u;      /* next matched address is not counted */
+        break;
+    case FAULT_BIT_FLIP:
+    case FAULT_SKIP_BYTE:
+        fault_pending = code;
+        break;
+    default:
+        break;
+    }
 }
 
 bool manager_i2c_busy(void)
@@ -238,6 +266,9 @@ static void i2c_bus_recover(void)
     first_byte = 0u;
     pending_cmd = 0u;
     pending_speed = -1;
+    fault_next = 0u;
+    fault_pending = 0u;
+    fault_drop_frame = 0u;
     sda_low_seen = false;
     last_recovery_ms = g_ms;
 
@@ -275,6 +306,28 @@ static void bus_health_poll(void)
     i2c_bus_recover();
 }
 
+/* Hand one snapshot byte to the master, applying a one-shot injected fault.
+ * Both the address-match byte and the TDBE byte go through here, otherwise a
+ * one-byte read would never see the fault. */
+static void i2c_send_byte(void)
+{
+    uint8_t v = reg_byte(reg_ptr);
+
+    if (fault_next != 0u) {
+        uint8_t f = fault_next;
+
+        fault_next = 0u;
+        if (f == FAULT_BIT_FLIP) {
+            v ^= 0x01u;
+        } else if (f == FAULT_SKIP_BYTE) {
+            reg_ptr = (reg_ptr + 1u) & 0xFFu;
+            v = reg_byte(reg_ptr);
+        }
+    }
+    I2C2->dt = v;
+    reg_ptr = (reg_ptr + 1u) & 0xFFu;
+}
+
 static void i2c_poll(void)
 {
     uint32_t sts1 = I2C2->sts1;
@@ -291,13 +344,16 @@ static void i2c_poll(void)
         (void)I2C2->sts2;
 
         g_frames++;                 /* one matched address = one transaction */
+        if (fault_drop_frame != 0u) {
+            g_frames--;
+            fault_drop_frame = 0u;
+        }
         sda_low_seen = false;
 
         if ((sts2 & STS2_DIRF) != 0u) {
             tx_mode = 1;
             rx_mode = 0;
-            I2C2->dt = reg_byte(reg_ptr);
-            reg_ptr = (reg_ptr + 1u) & 0xFFu;
+            i2c_send_byte();
         } else {
             rx_mode = 1;
             tx_mode = 0;
@@ -326,6 +382,8 @@ static void i2c_poll(void)
                 pending_cmd = b;
             } else if (reg_ptr == REG_SELECTED) {
                 g_regs[REG_SELECTED] = b & 0x0Fu;
+            } else if (reg_ptr == REG_FAULT) {
+                fault_apply(b);
             }
             reg_ptr = (reg_ptr + 1u) & 0xFFu;
         }
@@ -333,8 +391,7 @@ static void i2c_poll(void)
     }
 
     if ((tx_mode != 0u) && ((sts1 & STS1_TDBE) != 0u)) {
-        I2C2->dt = reg_byte(reg_ptr);
-        reg_ptr = (reg_ptr + 1u) & 0xFFu;
+        i2c_send_byte();
         return;
     }
 
@@ -344,6 +401,10 @@ static void i2c_poll(void)
         rx_mode = 0;
         tx_mode = 0;
         first_byte = 0;
+        if (fault_pending != 0u) {
+            fault_next = fault_pending;     /* one shot, next transaction */
+            fault_pending = 0u;
+        }
 
         if (pending_cmd != 0u) {
             if (pending_cmd == 3u) {

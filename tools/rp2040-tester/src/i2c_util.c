@@ -65,11 +65,25 @@ bool bus_health_sample(void)
 
     uint32_t now = health_u32(b);
 
-    if (frames_primed) {
-        bus_health_frames += now - frames_last;
+    if (!frames_primed) {
+        frames_last = now;
+        frames_primed = true;
+    } else {
+        uint32_t delta = now - frames_last;
+
+        /* A slave reset restarts the counter at zero.  Treat an implausible
+         * jump as a new baseline instead of inventing 4 billion lost frames. */
+        if (delta > 1000000u) {
+            bus_txn = 0u;
+            bus_health_frames = 0u;
+            bus_health_missed = 0u;
+            bus_health_truncated = 0u;
+            fail_base = failures_total();
+        } else {
+            bus_health_frames += delta;
+        }
+        frames_last = now;
     }
-    frames_last = now;
-    frames_primed = true;
     bus_health_flags = b[4];
     bus_health_err_bus = b[5];
 
@@ -86,11 +100,12 @@ void bus_health_reset(void)
 {
     uint8_t b[6];
 
-    if (health_read(b, sizeof(b))) {
-        frames_last = health_u32(b);
-        frames_primed = true;
-    } else {
-        frames_primed = false;
+    frames_primed = false;
+    for (int attempt = 0; (attempt < 3) && !frames_primed; attempt++) {
+        if (health_read(b, sizeof(b))) {
+            frames_last = health_u32(b);
+            frames_primed = true;
+        }
     }
 
     bus_txn = 0u;
@@ -429,6 +444,152 @@ bool send_cmd(uint8_t cmd)
 bool select_sensor(uint8_t index)
 {
     return bus_write_reg(REG_SELECTED, &index, 1u) == 1;
+}
+
+bool bus_fault(uint8_t code)
+{
+    return bus_write_reg(REG_FAULT, &code, 1u) == 1;
+}
+
+/* ---- bit-banged fault injection ---------------------------------------- */
+
+static void bb_delay(void)
+{
+    busy_wait_us_32(5);
+}
+
+static void bb_sda(int high)
+{
+    if (high) {
+        gpio_set_dir(PIN_SDA, GPIO_IN);
+    } else {
+        gpio_put(PIN_SDA, 0);
+        gpio_set_dir(PIN_SDA, GPIO_OUT);
+    }
+}
+
+static void bb_scl(int high)
+{
+    if (high) {
+        gpio_set_dir(PIN_SCL, GPIO_IN);
+    } else {
+        gpio_put(PIN_SCL, 0);
+        gpio_set_dir(PIN_SCL, GPIO_OUT);
+    }
+}
+
+static void bb_begin(void)
+{
+    gpio_set_function(PIN_SDA, GPIO_FUNC_SIO);
+    gpio_set_function(PIN_SCL, GPIO_FUNC_SIO);
+    gpio_pull_up(PIN_SDA);
+    gpio_pull_up(PIN_SCL);
+    bb_sda(1);
+    bb_scl(1);
+    bb_delay();
+}
+
+static void bb_end(void)
+{
+    bb_sda(1);
+    bb_scl(1);
+    bb_delay();
+    i2c_init(I2C_INST, current_speed);
+    gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
+    bus_recover();
+}
+
+static void bb_start(void)
+{
+    bb_sda(1);
+    bb_scl(1);
+    bb_delay();
+    bb_sda(0);
+    bb_delay();
+    bb_scl(0);
+    bb_delay();
+}
+
+static void bb_stop(void)
+{
+    bb_sda(0);
+    bb_delay();
+    bb_scl(1);
+    bb_delay();
+    bb_sda(1);
+    bb_delay();
+}
+
+/* Returns true when the slave acknowledged the byte. */
+static bool bb_byte(uint8_t b)
+{
+    for (int i = 7; i >= 0; i--) {
+        bb_sda((b >> i) & 1u);
+        bb_delay();
+        bb_scl(1);
+        bb_delay();
+        bb_scl(0);
+        bb_delay();
+    }
+    bb_sda(1);
+    bb_delay();
+    bb_scl(1);
+    bb_delay();
+    bool ack = !gpio_get(PIN_SDA);
+    bb_scl(0);
+    bb_delay();
+    return ack;
+}
+
+bool bus_bb_corrupt_addr(uint8_t addr7, int flip_bit)
+{
+    uint8_t addr = (uint8_t)(addr7 << 1);
+
+    if ((flip_bit > 0) && (flip_bit < 7)) {
+        addr ^= (uint8_t)(1u << flip_bit);
+    }
+
+    bb_begin();
+    bus_txn++;                      /* an address phase was attempted */
+    bb_start();
+    bool ack = bb_byte(addr);
+    bb_byte(0x00);
+    bb_stop();
+    bb_end();
+    return ack;
+}
+
+bool bus_bb_truncate(uint8_t addr7, uint8_t reg, int data_bits)
+{
+    bb_begin();
+    bus_txn++;
+    bb_start();
+    bool ack = bb_byte((uint8_t)(addr7 << 1));
+    if (ack) {
+        ack = bb_byte(reg);
+    }
+    for (int i = 0; (ack) && (i < data_bits) && (i < 8); i++) {
+        bb_sda((0x5Au >> (7 - i)) & 1u);
+        bb_delay();
+        bb_scl(1);
+        bb_delay();
+        bb_scl(0);
+        bb_delay();
+    }
+    bb_stop();
+    bb_end();
+    return ack;
+}
+
+void bus_bb_extra_clock(void)
+{
+    bb_begin();
+    bb_scl(0);
+    bb_delay();
+    bb_scl(1);
+    bb_delay();
+    bb_end();
 }
 
 bool read_scratch(uint8_t *dst9)

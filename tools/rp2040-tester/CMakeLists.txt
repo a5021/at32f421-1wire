@@ -22,6 +22,7 @@ add_executable(i2c_tester
     src/main.c
     src/i2c_util.c
     src/crc8.c
+    src/crc16.c
     src/tests.c
     src/lineedit.c
     src/scl_probe.c
@@ -29,6 +30,7 @@ add_executable(i2c_tester
     src/suites_map.c
     src/suites_ow.c
     src/suites_stress.c
+    src/suites_fault.c
 )
 
 target_include_directories(i2c_tester PRIVATE src)
