@@ -441,6 +441,51 @@ static void i2c_send_byte(void)
     reg_ptr = (reg_ptr + 1u) & 0xFFu;
 }
 
+/* Finish the previous transaction.  Called from the STOPF branch and, if the
+ * master starts a new transaction before the STOP was serviced, at the next
+ * address match: a stale STOP must never apply a command to the wrong
+ * transaction. */
+static void i2c_stop_done(void)
+{
+    (void)I2C2->sts1;
+    I2C2->ctrl1_bit.i2cen = 1;
+    rx_mode = 0u;
+    tx_mode = 0u;
+    first_byte = 0u;
+
+    if (forced_pullup != 0u) {
+        forced_pullup = 0u;
+        ow_hal_strong_pullup(false);    /* release only what we forced */
+    }
+    if (fault_pending != 0u) {
+        fault_next = fault_pending;     /* one shot, next transaction */
+        fault_pending = 0u;
+    }
+    if (pending_cmd != 0u) {
+        if (pending_cmd == 3u) {
+            health_clear();
+        } else if (pending_cmd == 7u) {
+            max_cycles = 0u;
+            max_state = 0u;
+            pub_phase_max[0] = 0u;
+            pub_phase_max[1] = 0u;
+            pub_phase_max[2] = 0u;
+            pub_phase_sum[0] = 0u;
+            pub_phase_sum[1] = 0u;
+            pub_phase_sum[2] = 0u;
+            pub_phase_cnt[0] = 0u;
+            pub_phase_cnt[1] = 0u;
+            pub_phase_cnt[2] = 0u;
+        }
+        manager_command(pending_cmd);
+        pending_cmd = 0u;
+    }
+    if (pending_speed >= 0) {
+        i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
+        pending_speed = -1;
+    }
+}
+
 static void i2c_poll(void)
 {
     uint32_t sts1 = I2C2->sts1;
@@ -452,6 +497,12 @@ static void i2c_poll(void)
 
     if ((sts1 & STS1_ADDR7F) != 0u) {
         uint32_t sts2 = I2C2->sts2;
+
+        /* A STOP from the previous transaction may still be pending if the
+         * master did not wait for it; finish it before starting the new one. */
+        if ((sts1 & STS1_STOPF) != 0u) {
+            i2c_stop_done();
+        }
 
         (void)I2C2->sts1;
         (void)I2C2->sts2;
@@ -519,37 +570,7 @@ static void i2c_poll(void)
     }
 
     if ((sts1 & STS1_STOPF) != 0u) {
-        (void)I2C2->sts1;
-        I2C2->ctrl1_bit.i2cen = 1;
-        rx_mode = 0;
-        tx_mode = 0;
-        first_byte = 0;
-        if (forced_pullup != 0u) {
-            forced_pullup = 0u;
-            ow_hal_strong_pullup(false);    /* release only what we forced */
-        }
-        if (fault_pending != 0u) {
-            fault_next = fault_pending;     /* one shot, next transaction */
-            fault_pending = 0u;
-        }
-
-        if (pending_cmd != 0u) {
-            if (pending_cmd == 3u) {
-                health_clear();
-            } else if (pending_cmd == 7u) {
-                max_cycles = 0u;
-                max_state = 0u;
-                pub_phase_max[0] = 0u;
-                pub_phase_max[1] = 0u;
-                pub_phase_max[2] = 0u;
-            }
-            manager_command(pending_cmd);
-            pending_cmd = 0;
-        }
-        if (pending_speed >= 0) {
-            i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
-            pending_speed = -1;
-        }
+        i2c_stop_done();
         return;
     }
 

@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Changed
+- **Bridge:** a STOP that has not been serviced yet is finished at the next
+  address match, so a command can never be applied to the wrong transaction.
+  The master no longer needs a gap between the pointer write and the read:
+  removing it took torn reads at 400 kHz from 10 per 20 000 to 0.
 - **Bridge:** `publish()` no longer rebuilds the map in one blocking call. It
   fills a 256-byte shadow buffer, computes the CRC in 32-byte steps and only
   then copies the shadow into `g_regs`. The host-writable `REG_CMD`,

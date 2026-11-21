@@ -67,6 +67,11 @@ DS18B20 convert, DS2431 read. Each operation is scheduled as a hardware pass
 on TMR1+DMA and completes asynchronously; `_poll` functions advance the state
 machine by waiting for the timer update flag.
 
+The slave may be addressed again before it has serviced the previous STOP: in
+that case the pending STOP is finished at the address match, so a command or a
+speed change is always applied to the transaction that carried it. The master
+therefore needs no gap between the pointer write and the following read.
+
 ## Slave service latency
 
 The slave ACKs an address in hardware, so the master starts clocking whether

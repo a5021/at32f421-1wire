@@ -284,8 +284,6 @@ int bus_read_reg(uint8_t reg, uint8_t *buf, size_t len)
     if (!tx_reg(reg, NULL, 0u, false)) {
         return -1;
     }
-    /* Let the slave service STOPF before the next START. */
-    busy_wait_us_32(50);
 
     bus_txn++;
     int got = i2c_read_timeout_us(I2C_INST, BRIDGE_ADDR, buf, len, false,
