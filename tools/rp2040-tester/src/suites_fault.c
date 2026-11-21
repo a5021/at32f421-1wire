@@ -260,4 +260,10 @@ void suite_fault(void)
                    f1, f2);
         }
     }
+
+    /* The injected faults are expected; leave the diagnostics clean so the
+     * next `health` reflects real traffic, not this suite. */
+    (void)send_cmd(CMD_CLEAR_COUNTERS);
+    bus_stats_reset();
+    sleep_ms(10u);
 }
