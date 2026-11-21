@@ -9,8 +9,18 @@
   `REG_SELECTED` and `REG_SPEED` are preserved across the copy, and a
   selection change during the build restarts it instead of publishing a
   mismatched scratchpad.
-- **Bridge:** `REG_STALL`, `REG_STALL_STATE` and `0x68` expose the worst
-  publish-phase durations; `CMD=7` clears them.
+- **Bridge:** `REG_STALL`, `REG_STALL_STATE`, `0x68` and `0x69..0x6B` expose
+  the worst and average publish-phase durations in microseconds; `CMD=7`
+  clears them. Measured at 400 kHz with the word copy: fill 17 us, CRC chunk
+  4-5 us, commit 14 us (was 142 us with newlib `memcpy`).
+
+### Fixed
+- **Bridge:** the map copies use a word loop instead of `memcpy`. Newlib's
+  `memcpy` took ~142 us for 256 bytes (66 cycles/byte), which alone exceeded
+  the slave's service-latency budget; the word copy takes ~14 us. The CRC
+  loop also uses a precomputed skip table instead of a per-byte predicate.
+- **Tester:** T55 reads the cycle counter after the corrupted write, so a
+  publish already in flight cannot be mistaken for the post-write one.
 
 ### Fixed
 - **Bridge:** CRC-16 is table-driven. The bitwise loop blocked the CPU for

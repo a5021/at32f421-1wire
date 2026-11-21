@@ -31,6 +31,8 @@
 #define REG_MGR                 0x65u
 #define REG_STALL               0x66u
 #define REG_STALL_STATE         0x67u
+#define REG_STALL_P2            0x68u
+#define REG_STALL_AVG           0x69u
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 
@@ -85,3 +87,4 @@
 #define INVALID_TEMP            0x8000
 
 #endif /* TESTER_REGMAP_H */
+

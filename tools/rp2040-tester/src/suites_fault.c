@@ -323,13 +323,15 @@ void suite_fault(void)
          * scratchpad is republished once per cycle, hence the wait. */
         if (ok) {
             uint8_t raw[2] = { 0, 0 };
+            uint16_t cycle;
 
-            ok = bus_read_reg(REG_CYCLE_L, raw, 2u) == 2;
-            uint16_t cycle = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
-
+            ok = bus_bb_corrupt_write(BRIDGE_ADDR, REG_SELECTED, 0x0Fu, 3);
+            /* Read the cycle after the write: a publish that was already in
+             * flight when we wrote restarts and lands on the next cycle. */
             if (ok) {
-                ok = bus_bb_corrupt_write(BRIDGE_ADDR, REG_SELECTED, 0x0Fu, 3);
+                ok = bus_read_reg(REG_CYCLE_L, raw, 2u) == 2;
             }
+            cycle = (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
             if (ok) {
                 ok = map_wait_cycle(cycle, map, 4000u);
             }

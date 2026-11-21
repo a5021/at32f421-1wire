@@ -36,6 +36,8 @@ extern "C" {
 #define REG_MGR                 0x65u
 #define REG_STALL               0x66u   /* worst manager_poll duration, us */
 #define REG_STALL_STATE         0x67u   /* manager state of that call */
+#define REG_STALL_P2            0x68u   /* publish phase 2 max */
+#define REG_STALL_AVG           0x69u   /* publish phase 0/1/2 averages */
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 

@@ -52,12 +52,13 @@ static uint32_t g_cmd;
 
 /* Shared register file, visible to app/main.c through the extern in
  * manager.h. */
-uint8_t  g_regs[256];
+uint8_t  g_regs[256] __attribute__((aligned(4)));
 volatile uint32_t g_i2c_speed = 0;
 static uint32_t roms_dirty = 1;
 
 static uint16_t crc_table[256];
 static void crc_table_init(void);
+static void crc_skip_table_init(void);
 
 /* Number of ROMs actually stored in roms[] (the search counts more). */
 static uint32_t rom_count(void)
@@ -106,6 +107,7 @@ void manager_init(void)
 {
     memset((void *)g_regs, 0, sizeof(g_regs));
     crc_table_init();
+    crc_skip_table_init();
     g_regs[REG_MAGIC] = 0x5Au;
     g_regs[REG_VERSION] = 0x03u;
     ds18b20_init(&sensor, true);
@@ -149,18 +151,40 @@ static void crc_table_init(void)
     }
 }
 
-static uint8_t  shadow[256];
+static uint8_t  shadow[256] __attribute__((aligned(4)));
 static uint8_t  pub_phase;
 static uint32_t pub_pos;
 static uint16_t pub_crc;
 static uint16_t cycle_next;
 uint32_t pub_phase_max[3];
+uint32_t pub_phase_sum[3];
+uint32_t pub_phase_cnt[3];
+static uint8_t  crc_skip_tab[256];
 
 static bool crc_skip(uint32_t i)
 {
     return (i == REG_FLAGS) || (i == REG_SEQ) ||
            ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
-           ((i >= REG_CMD) && (i <= (REG_STALL_STATE + 1u)));
+           ((i >= REG_CMD) && (i <= (REG_STALL_AVG + 2u)));
+}
+
+/* Byte copy in words: 256 bytes is 64 stores, which keeps the commit well
+ * inside the slave's service-latency budget. */
+static void map_copy(uint8_t *dst, const uint8_t *src)
+{
+    uint32_t *d = (uint32_t *)(void *)dst;
+    const uint32_t *s = (const uint32_t *)(const void *)src;
+
+    for (uint32_t i = 0u; i < 64u; i++) {
+        d[i] = s[i];
+    }
+}
+
+static void crc_skip_table_init(void)
+{
+    for (uint32_t i = 0u; i < 256u; i++) {
+        crc_skip_tab[i] = crc_skip(i) ? 1u : 0u;
+    }
 }
 
 /* Build the next snapshot into the shadow buffer. */
@@ -234,7 +258,7 @@ static void publish_step(void)
 
     switch (pub_phase) {
     case 0u:
-        memcpy((void *)shadow, (const void *)g_regs, sizeof(shadow));
+        map_copy(shadow, (const uint8_t *)g_regs);
         publish_fill(shadow);
         pub_crc = 0xFFFFu;
         pub_pos = 0u;
@@ -248,7 +272,7 @@ static void publish_step(void)
             end = 256u;
         }
         for (uint32_t i = pub_pos; i < end; i++) {
-            if (crc_skip(i)) {
+            if (crc_skip_tab[i] != 0u) {
                 continue;
             }
             pub_crc = (uint16_t)((uint16_t)(pub_crc << 8) ^
@@ -277,7 +301,7 @@ static void publish_step(void)
             uint8_t live_sel = g_regs[REG_SELECTED];
 
             g_regs[REG_SEQ] = ++pub_seq;    /* odd: update in progress */
-            memcpy((void *)g_regs, (const void *)shadow, sizeof(shadow));
+            map_copy((uint8_t *)g_regs, (const uint8_t *)shadow);
             g_regs[REG_CMD] = live_cmd;
             g_regs[REG_SELECTED] = live_sel;
             g_regs[REG_SPEED] = (uint8_t)g_i2c_speed;
@@ -299,6 +323,8 @@ static void publish_step(void)
         if (d > pub_phase_max[ph_in]) {
             pub_phase_max[ph_in] = d;
         }
+        pub_phase_sum[ph_in] += d;
+        pub_phase_cnt[ph_in]++;
     }
 }
 

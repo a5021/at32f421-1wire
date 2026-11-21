@@ -26,6 +26,8 @@ extern volatile uint32_t g_i2c_speed;
 
 extern uint8_t g_regs[256];
 extern uint32_t pub_phase_max[3];
+extern uint32_t pub_phase_sum[3];
+extern uint32_t pub_phase_cnt[3];
 
 extern uint32_t publish_all_cycles;
 extern uint32_t publish_crc_cycles;
@@ -166,8 +168,29 @@ static uint8_t reg_byte(uint32_t addr)
 
         return (uint8_t)((us > 255u) ? 255u : us);
     }
-    case REG_STALL_STATE + 1u: {
+    case REG_STALL_P2: {
         uint32_t us = pub_phase_max[2] / cycles_per_us;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
+    case REG_STALL_AVG: {
+        uint32_t us = (pub_phase_cnt[0] != 0u)
+                      ? (pub_phase_sum[0] / pub_phase_cnt[0]) / cycles_per_us
+                      : 0u;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
+    case REG_STALL_AVG + 1u: {
+        uint32_t us = (pub_phase_cnt[1] != 0u)
+                      ? (pub_phase_sum[1] / pub_phase_cnt[1]) / cycles_per_us
+                      : 0u;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
+    case REG_STALL_AVG + 2u: {
+        uint32_t us = (pub_phase_cnt[2] != 0u)
+                      ? (pub_phase_sum[2] / pub_phase_cnt[2]) / cycles_per_us
+                      : 0u;
 
         return (uint8_t)((us > 255u) ? 255u : us);
     }
@@ -600,6 +623,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void) __attribute__((alias("HardFault_Handler")));
 void BusFault_Handler(void) __attribute__((alias("HardFault_Handler")));
 void UsageFault_Handler(void) __attribute__((alias("HardFault_Handler")));
+
 
 
 
