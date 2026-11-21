@@ -13,6 +13,7 @@
 
 static uint8_t  tx_buf[TX_MAX];
 static uint32_t current_speed = BUS_SPEED_400K;
+static uint32_t current_nominal = 400u;
 
 volatile uint32_t bus_err_timeout;
 volatile uint32_t bus_err_nack;
@@ -141,11 +142,23 @@ void bus_init(void)
 void bus_set_speed(uint32_t hz)
 {
     current_speed = i2c_set_baudrate(I2C_INST, (uint)hz);
+    if (hz == BUS_SPEED_FAST) {
+        current_nominal = 400u;
+    } else if (hz == BUS_SPEED_100K) {
+        current_nominal = 100u;
+    } else {
+        current_nominal = (hz + 500u) / 1000u;
+    }
 }
 
 uint32_t bus_speed(void)
 {
     return current_speed;
+}
+
+uint32_t bus_nominal_khz(void)
+{
+    return current_nominal;
 }
 
 void bus_recover(void)

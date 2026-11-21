@@ -52,6 +52,7 @@ static int      fail_step;
 static uint64_t fail_next_us;
 static bool     adc_ready;
 
+
 static void seed_history(lineedit_t *le);
 static const char *health_verdict(void);
 
@@ -220,12 +221,7 @@ static void print_status(void)
     uint32_t up_s = (uint32_t)(to_ms_since_boot(get_absolute_time()) / 1000u);
     bool ack = bus_probe(BRIDGE_ADDR);
 
-    uint32_t link = bus_speed();
-
-    if (link == BUS_SPEED_FAST) {
-        link = 400000u;
-    }
-    printf("uptime %u s, link %u kHz\n", up_s, (unsigned)(link / 1000u));
+    printf("uptime %u s, link %u kHz\n", up_s, (unsigned)bus_nominal_khz());
     printf("target 0x%02X: %s\n", BRIDGE_ADDR, ack ? "ack" : "nack");
 
     if (g_result_count != 0) {
@@ -529,8 +525,8 @@ static void cmd_sample(const char *arg)
         return;
     }
 
-    printf("%d kHz fast, %d kHz median, %u periods\n",
-           (int)(st.khz_fast + 0.5f), (int)(st.khz_med + 0.5f), st.periods);
+    printf("%.1f kHz fast, %.1f kHz median, %u periods\n",
+           st.khz_fast, st.khz_med, st.periods);
     printf("period min ");
     print_us((uint32_t)(st.min_period_us * 1000.0f + 0.5f));
     printf(" us, med ");
@@ -586,12 +582,14 @@ static void cmd_speed_auto(void)
     sleep_ms(20u);
 
     if (bus_probe(BRIDGE_ADDR)) {
+
         printf("400 kHz works\n");
         return;
     }
 
     bus_set_speed(BUS_SPEED_100K);
     write_speed(0u);
+
     printf("400 kHz failed, using 100 kHz\n");
 }
 
@@ -824,6 +822,7 @@ static const cmd_desc_t command_table[] = {
     { "stress", "stress [n]", "n map reads at the current link speed" },
     { "couple", "couple [n]", "same, with a strong 1-Wire load in every frame" },
     { "stall", "stall [n]", "same, with a 200 us CPU stall at byte 64" },
+    { "rawspeed", "rawspeed <hz>", "set the master clock directly (calibration)" },
     { "adc", "adc", "VSYS and chip temperature" },
     { "clear", "clear", "clear the terminal" },
     { "history", "history [clear]", "show or reset command history" },
@@ -1011,12 +1010,14 @@ static void handle_line(char *line)
         if ((khz >= 50) && (khz <= 1000)) {
             uint8_t slave = (khz > 100) ? 1u : 0u;
             uint32_t request = (khz == 400) ? BUS_SPEED_FAST
+                             : (khz == 100) ? BUS_SPEED_100K
                                             : (uint32_t)khz * 1000u;
 
             bus_set_speed(BUS_SPEED_100K);
             write_speed(slave);
             sleep_ms(30u);
             bus_set_speed(request);
+
             printf("link %d kHz\n", (khz == 400) ? 400 : khz);
         } else if (strcmp(arg, "auto") == 0) {
             cmd_speed_auto();
@@ -1048,6 +1049,17 @@ static void handle_line(char *line)
                                           : 1000u;
 
         stall_run(count == 0u ? 1000u : count);
+        return;
+    }
+    if (strcmp(cmd, "rawspeed") == 0) {
+        uint32_t hz = (uint32_t)strtoul(arg, NULL, 0);
+
+        if (hz >= 50000u) {
+            bus_set_speed(hz);
+            printf("raw %u Hz\n", (unsigned)hz);
+        } else {
+            printf("usage: rawspeed <hz>\n");
+        }
         return;
     }
     if (strcmp(cmd, "adc") == 0) {
@@ -1149,3 +1161,5 @@ int main(void)
         tight_loop_contents();
     }
 }
+
+

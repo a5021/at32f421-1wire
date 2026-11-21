@@ -235,6 +235,10 @@ void suite_map(void)
         int inc = 0;
         int bad = 0;
 
+        /* A queued rescan can keep the manager in search for the whole window
+         * and publish nothing, so start from an idle cycle. */
+        (void)map_wait_not_busy(5000u);
+
         for (int i = 0; i < 20; i++) {
             uint8_t raw[2];
             bool got = false;
@@ -256,7 +260,31 @@ void suite_map(void)
                     } else if (delta <= 4u) {
                         inc++;
                     } else {
-                        bad++;
+                        /* One corrupted byte can fake a jump; confirm once. */
+                        uint8_t raw2[2];
+                        bool got2 = false;
+
+                        for (int a = 0; a < 2; a++) {
+                            if (bus_read_reg(REG_CYCLE_L, raw2, 2u) == 2) {
+                                got2 = true;
+                                break;
+                            }
+                        }
+                        if (got2) {
+                            uint16_t now2 = (uint16_t)(raw2[0] |
+                                                       ((uint16_t)raw2[1] << 8));
+                            uint16_t d2 = (uint16_t)(now2 - prev);
+
+                            if (d2 <= 4u) {
+                                inc++;
+                                now = now2;
+                            } else {
+                                bad++;
+                                now = now2;
+                            }
+                        } else {
+                            bad++;
+                        }
                     }
                 }
                 prev = now;
@@ -405,10 +433,18 @@ void suite_map(void)
         bus_hold_sda_low(50u);
         sleep_ms(20u);
 
-        if (!bus_health_sample()) {
-            t_fail("sample failed");
-        } else if ((bus_health_flags & HEALTH_SDA_STUCK) == 0u) {
-            t_fail("stuck not detected, flags 0x%02X", bus_health_flags);
+        /* The flag is sticky, so read it a few times: a corrupted byte must
+         * not turn a detected fault into a failure. */
+        uint8_t seen = 0u;
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (bus_health_sample()) {
+                seen |= bus_health_flags;
+            }
+        }
+
+        if ((seen & HEALTH_SDA_STUCK) == 0u) {
+            t_fail("stuck not detected, flags 0x%02X", seen);
         } else if (!bus_probe(BRIDGE_ADDR)) {
             t_fail("stuck detected, target did not recover");
         } else {

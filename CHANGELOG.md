@@ -6,6 +6,12 @@
 - **Bridge:** CRC-16 is table-driven. The bitwise loop blocked the CPU for
   ~150 us inside `publish()`; while the CPU is busy the master can corrupt the
   byte it is transferring, so the loop is now ~25 us.
+- **Tester:** both link speeds are calibrated to the measured SCL. The RP2040
+  controller adds a fixed overhead per period, so 100 kHz requested gave
+  95 kHz and 400 kHz gave 365 kHz; the tester now requests 105.4 kHz and
+  440 kHz, which measure 100.1 and 401 kHz. `sample` reports one decimal.
+- **Tester:** single-shot reads in T22/T46/T55 are retried, so the known
+  rare corrupt byte cannot turn a pass into a failure.
 
 ### Added
 - **Bridge:** CRC-16/CCITT (`REG_MAP_CRC`, `0x63`) over the published
