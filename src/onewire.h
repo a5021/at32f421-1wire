@@ -33,6 +33,13 @@ ow_status_t ow_reset_poll(bool *presence);
 bool        ow_write_start(const uint8_t *data, uint16_t len);
 ow_status_t ow_write_poll(void);
 
+/* Chunked variant of ow_write_start for packets too long to expand in one
+ * call: a ten-byte packet costs ~13 us of CPU, and the I2C slave has less than
+ * that to answer an address.  Build in small steps, then fire. */
+void        ow_tx_reset(void);
+uint16_t    ow_tx_build(const uint8_t *data, uint16_t len);
+bool        ow_tx_fire(uint16_t len);
+
 bool        ow_read_start(uint16_t len);
 ow_status_t ow_read_poll(uint8_t *dst);
 

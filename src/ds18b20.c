@@ -12,6 +12,7 @@
 enum {
     DS_PH_RESET_ARM = 0,
     DS_PH_RESET_WAIT,
+    DS_PH_WRITE_BUILD,
     DS_PH_WRITE_WAIT,
     DS_PH_DELAY_WAIT,
     DS_PH_READ_WAIT,
@@ -90,20 +91,28 @@ ow_status_t ds18b20_convert_poll(ds18b20_t *d)
         }
 
         {
-            uint8_t cmd[10];
-            uint16_t n = build_prefix(d, cmd);
-            cmd[n++] = DS18B20_CMD_CONVERT_T;
-            if (!ow_write_start(cmd, n)) {
-                d->phase = DS_PH_DONE;
-                if (d->parasite) {
-                    ow_hal_strong_pullup(false);
-                }
-                return OW_PARAM;
+            uint16_t n = build_prefix(d, d->cmd);
+            d->cmd[n++] = DS18B20_CMD_CONVERT_T;
+            d->cmd_len = (uint8_t)n;
+        }
+        ow_tx_reset();
+        d->phase = DS_PH_WRITE_BUILD;
+        return OW_BUSY;
+    }
+
+    case DS_PH_WRITE_BUILD:
+        if (ow_tx_build(d->cmd, d->cmd_len) != 0u) {
+            return OW_BUSY;
+        }
+        if (!ow_tx_fire(d->cmd_len)) {
+            d->phase = DS_PH_DONE;
+            if (d->parasite) {
+                ow_hal_strong_pullup(false);
             }
+            return OW_PARAM;
         }
         d->phase = DS_PH_WRITE_WAIT;
         return OW_BUSY;
-    }
 
     case DS_PH_WRITE_WAIT: {
         ow_status_t st = ow_write_poll();
@@ -177,17 +186,25 @@ ow_status_t ds18b20_read_poll(ds18b20_t *d)
         }
 
         {
-            uint8_t cmd[10];
-            uint16_t n = build_prefix(d, cmd);
-            cmd[n++] = DS18B20_CMD_READ_SP;
-            if (!ow_write_start(cmd, n)) {
-                d->phase = DS_PH_DONE;
-                return OW_PARAM;
-            }
+            uint16_t n = build_prefix(d, d->cmd);
+            d->cmd[n++] = DS18B20_CMD_READ_SP;
+            d->cmd_len = (uint8_t)n;
+        }
+        ow_tx_reset();
+        d->phase = DS_PH_WRITE_BUILD;
+        return OW_BUSY;
+    }
+
+    case DS_PH_WRITE_BUILD:
+        if (ow_tx_build(d->cmd, d->cmd_len) != 0u) {
+            return OW_BUSY;
+        }
+        if (!ow_tx_fire(d->cmd_len)) {
+            d->phase = DS_PH_DONE;
+            return OW_PARAM;
         }
         d->phase = DS_PH_WRITE_WAIT;
         return OW_BUSY;
-    }
 
     case DS_PH_WRITE_WAIT: {
         ow_status_t st = ow_write_poll();

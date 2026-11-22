@@ -42,6 +42,7 @@ typedef struct {
     uint8_t  mode;
     uint8_t  len;
     uint8_t  es;
+    uint8_t  cmd_len;               /* read command length, built in ARM */
     bool     match_rom;
     uint8_t  rom[8];
     uint16_t addr;

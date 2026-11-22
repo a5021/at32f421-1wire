@@ -33,8 +33,7 @@ typedef struct {
 } retry_ev_t;
 
 static retry_ev_t g_ev[RETRY_SAMPLES];
-static int      g_ev_n;
-static uint32_t g_phase_busy;
+static int      g_ev_n;static uint32_t g_phase_busy;
 static uint32_t g_phase_idle;
 static uint32_t g_phase_unknown;
 static uint32_t g_off_bucket[OFF_BUCKETS];
@@ -43,12 +42,26 @@ static uint32_t g_mgr[8];       /* retries per manager state */
 static uint32_t g_bit[8];       /* which bit position was corrupted */
 static uint32_t g_step[3];      /* transport: seq-in, map, seq-out */
 
+/* Snapshot of the last validate failure, for the anomaly investigation. */
+static uint8_t g_fail_map[16];
+static uint8_t g_fail_crc[2];
+static uint8_t g_fail_seq[2];
+static uint8_t g_fail_diag[4];
+static uint8_t g_fail_trunc[2];
+static uint8_t g_fail_ffstart;
+static uint8_t g_fail_health;
+static uint8_t g_fail_tail;
+static uint32_t g_fail_frames;
+static uint32_t g_fail_txn;
+static uint8_t g_fail_valid;
+
 /* Bytes that legitimately change between two reads. */
 static bool map_volatile_index(int i)
 {
     return (i == (int)REG_FLAGS) || (i == (int)REG_SEQ) ||
            ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
-           ((i >= (int)REG_CMD) && (i <= (int)REG_STALL_AVG + 2));
+           ((i >= (int)REG_CMD) && (i <= (int)REG_DIAG_REASON)) ||
+        ((i >= (int)REG_MAX_STEP) && (i <= (int)REG_EEP_POLL));
 }
 
 static void retry_stats_reset(void)
@@ -211,6 +224,60 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
         int off = -1;
         uint8_t xb = 0u;
         {
+            memcpy(g_fail_map, map, sizeof(g_fail_map));
+            g_fail_crc[0] = map[REG_MAP_CRC_L];
+            g_fail_crc[1] = map[REG_MAP_CRC_H];
+            g_fail_seq[0] = s1;
+            g_fail_seq[1] = s2;
+            (void)bus_read_reg(REG_DIAG_CRC_FFFF, g_fail_diag,
+                               sizeof(g_fail_diag));
+            (void)bus_read_reg(REG_OUF_POS, g_fail_trunc,
+                               sizeof(g_fail_trunc));
+            {
+                uint8_t fr[4];
+
+                g_fail_txn = bus_txn;
+                g_fail_frames = 0u;
+                if (bus_read_reg(REG_FRAMES, fr, sizeof(fr)) ==
+                    (int)sizeof(fr)) {
+                    g_fail_frames = (uint32_t)fr[0] |
+                                    ((uint32_t)fr[1] << 8) |
+                                    ((uint32_t)fr[2] << 16) |
+                                    ((uint32_t)fr[3] << 24);
+                }
+            }
+            {
+                uint8_t h = 0u;
+                uint8_t tail = 0u;
+
+                (void)bus_read_reg(REG_HEALTH, &h, 1u);
+                g_fail_health = h;
+                g_fail_ffstart = 0xFFu;
+                for (int i = 0; i <= 240; i++) {
+                    bool all = true;
+
+                    for (int j = 0; j < 16; j++) {
+                        if (map[i + j] != 0xFFu) {
+                            all = false;
+                            break;
+                        }
+                    }
+                    if (all) {
+                        g_fail_ffstart = (uint8_t)i;
+                        break;
+                    }
+                }
+                for (int i = 255; i >= 0; i--) {
+                    if (map[i] != 0xFFu) {
+                        break;
+                    }
+                    tail++;
+                }
+                g_fail_tail = tail;
+            }
+            g_fail_valid = 1u;
+        }
+        {
             uint8_t map2[256];
             uint8_t map3[256];
 
@@ -309,10 +376,33 @@ static void stress_loop(uint32_t count, int mode, const char *label)
            (unsigned)g_validate, (unsigned)g_retries, g_last_why, g_val_why,
            g_last_rom);
     retry_stats_print();
+
+    {
+        uint8_t ms[7];
+
+        if (bus_read_reg(REG_MAX_STEP, ms, sizeof(ms)) == (int)sizeof(ms)) {
+            printf("max manager step: %u us, state %u; ouf %u@%u; "
+                   "eep start %u us, poll %u us\n",
+                   (unsigned)((uint16_t)ms[0] | ((uint16_t)ms[1] << 8)), ms[2],
+                   ms[3], ms[4], ms[5], ms[6]);
+        }
+    }
+
+    if (g_fail_valid != 0u) {
+        printf("last fail: seq %02X/%02X magic %02X ver %02X flags %02X "
+               "crc %02X%02X diag ffff %u busy %u ack %u reason %u health %02X "
+               "ff-tail %u ff-start %u ouf %u@%u frames %u txn %u\n",
+               g_fail_seq[0], g_fail_seq[1], g_fail_map[0], g_fail_map[1],
+               g_fail_map[2], g_fail_crc[1], g_fail_crc[0], g_fail_diag[0],
+               g_fail_diag[1], g_fail_diag[2], g_fail_diag[3], g_fail_health,
+               g_fail_tail, g_fail_ffstart, g_fail_trunc[0], g_fail_trunc[1],
+               (unsigned)g_fail_frames, (unsigned)g_fail_txn);
+    }
 }
 
 void stress_run(uint32_t count)
 {
+    g_fail_valid = 0u;
     stress_loop(count, 0, "stress");
 }
 
@@ -626,5 +716,15 @@ void suite_stress(void)
     bus_set_speed(BUS_SPEED_400K);
     write_speed(1u);
 }
+
+
+
+
+
+
+
+
+
+
 
 

@@ -33,6 +33,17 @@
 #define REG_STALL_STATE         0x67u
 #define REG_STALL_P2            0x68u
 #define REG_STALL_AVG           0x69u
+#define REG_DIAG_CRC_FFFF       0x6Cu
+#define REG_DIAG_BUSY           0x6Du
+#define REG_DIAG_ACK            0x6Eu
+#define REG_DIAG_REASON         0x6Fu
+#define REG_MAX_STEP            0x79u
+#define REG_MAX_STEP_H          0x7Au
+#define REG_MAX_STATE           0x7Bu
+#define REG_OUF_POS             0x7Cu
+#define REG_OUF_PTR             0x7Du
+#define REG_EEP_START           0x7Eu
+#define REG_EEP_POLL            0x7Fu
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 
@@ -87,4 +98,12 @@
 #define INVALID_TEMP            0x8000
 
 #endif /* TESTER_REGMAP_H */
+
+
+
+
+
+
+
+
 

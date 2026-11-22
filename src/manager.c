@@ -159,24 +159,44 @@ static uint16_t cycle_next;
 uint32_t pub_phase_max[3];
 uint32_t pub_phase_sum[3];
 uint32_t pub_phase_cnt[3];
+static uint32_t eep_start_max;
+static uint32_t eep_poll_max;
+static uint8_t diag_crc_ffff;
 static uint8_t  crc_skip_tab[256];
 
 static bool crc_skip(uint32_t i)
 {
     return (i == REG_FLAGS) || (i == REG_SEQ) ||
            ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
-           ((i >= REG_CMD) && (i <= (REG_STALL_AVG + 2u)));
+           ((i >= REG_CMD) && (i <= REG_DIAG_REASON)) ||
+           ((i >= REG_MAX_STEP) && (i <= REG_EEP_POLL));
 }
 
-/* Byte copy in words: 256 bytes is 64 stores, which keeps the commit well
- * inside the slave's service-latency budget. */
-static void map_copy(uint8_t *dst, const uint8_t *src)
+/* One 64-byte quarter of the 256-byte map, copied in words.  The whole map is
+ * four chunks: a full copy measured 14 us, which sits on the slave's ~20 us
+ * service budget at 400 kHz. */
+static void map_copy_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
 {
-    uint32_t *d = (uint32_t *)(void *)dst;
-    const uint32_t *s = (const uint32_t *)(const void *)src;
+    uint32_t *d = (uint32_t *)(void *)(dst + pos);
+    const uint32_t *s = (const uint32_t *)(const void *)(src + pos);
 
-    for (uint32_t i = 0u; i < 64u; i++) {
+    for (uint32_t i = 0u; i < 16u; i++) {
         d[i] = s[i];
+    }
+}
+
+/* Commit chunk.  Byte-wise so the host-owned bytes REG_CMD..REG_FAULT are left
+ * alone; skipping them also removes the save/restore pair that used to lose a
+ * host write made in the middle of the copy. */
+static void map_commit_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
+{
+    uint32_t end = pos + 64u;
+
+    for (uint32_t i = pos; i < end; i++) {
+        if ((i >= REG_CMD) && (i <= REG_FAULT)) {
+            continue;
+        }
+        dst[i] = src[i];
     }
 }
 
@@ -251,18 +271,20 @@ static void publish_fill(uint8_t *dst)
  * I2C slave can only keep the CPU busy for about eight bit times before the
  * master corrupts the byte it is transferring, and the whole 256-byte CRC is
  * far longer than that. */
-static void publish_step(void)
-{
+static void publish_step(void){
     uint32_t t0 = NOW_CYCLES();
     uint8_t ph_in = pub_phase;
 
     switch (pub_phase) {
     case 0u:
-        map_copy(shadow, (const uint8_t *)g_regs);
-        publish_fill(shadow);
-        pub_crc = 0xFFFFu;
-        pub_pos = 0u;
-        pub_phase = 1u;
+        map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
+        pub_pos += 64u;
+        if (pub_pos >= 256u) {
+            publish_fill(shadow);
+            pub_crc = 0xFFFFu;
+            pub_pos = 0u;
+            pub_phase = 1u;
+        }
         break;
 
     case 1u: {
@@ -282,35 +304,38 @@ static void publish_step(void)
         if (pub_pos >= 256u) {
             shadow[REG_MAP_CRC_L] = (uint8_t)(pub_crc & 0xFFu);
             shadow[REG_MAP_CRC_H] = (uint8_t)(pub_crc >> 8);
+            pub_pos = 0u;
             pub_phase = 2u;
         }
         break;
     }
 
     default:
-        /* The host can change the selection while the CRC is being built; the
-         * scratchpad was chosen for the old one, so rebuild instead of
-         * publishing a mismatched pair. */
         if ((g_regs[REG_SELECTED] & 0x0Fu) != shadow[REG_SELECTED]) {
+            /* A selection change restarts the build.  Checked before every
+             * chunk because the window is now four calls wide. */
             pub_phase = 0u;
+            pub_pos = 0u;
             break;
         }
-        {
-            /* Registers the host owns must survive the bulk copy. */
-            uint8_t live_cmd = g_regs[REG_CMD];
-            uint8_t live_sel = g_regs[REG_SELECTED];
-
+        if (pub_pos == 0u) {
+            if (pub_crc == 0xFFFFu) {
+                if (diag_crc_ffff != 0xFFu) {
+                    diag_crc_ffff++;
+                }
+            }
             g_regs[REG_SEQ] = ++pub_seq;    /* odd: update in progress */
-            map_copy((uint8_t *)g_regs, (const uint8_t *)shadow);
-            g_regs[REG_CMD] = live_cmd;
-            g_regs[REG_SELECTED] = live_sel;
-            g_regs[REG_SPEED] = (uint8_t)g_i2c_speed;
+        }
+        map_commit_chunk((uint8_t *)g_regs, (const uint8_t *)shadow, pub_pos);
+        pub_pos += 64u;
+        if (pub_pos >= 256u) {
             cycle = cycle_next;
             g_regs[REG_SEQ] = ++pub_seq;    /* even: snapshot stable */
+            pub_pos = 0u;
+            pub_phase = 0u;
+            manager_state = MGR_WAIT;
+            ow_delay_start(200000u);
         }
-        pub_phase = 0u;
-        manager_state = MGR_WAIT;
-        ow_delay_start(200000u);
         break;
     }
 
@@ -326,6 +351,26 @@ static void publish_step(void)
         pub_phase_sum[ph_in] += d;
         pub_phase_cnt[ph_in]++;
     }
+}
+
+bool manager_publish_busy(void)
+{
+    return pub_phase != 0u;
+}
+
+uint8_t manager_crc_ffff_count(void)
+{
+    return diag_crc_ffff;
+}
+
+uint32_t manager_eep_start_max(void)
+{
+    return eep_start_max;
+}
+
+uint32_t manager_eep_poll_max(void)
+{
+    return eep_poll_max;
 }
 
 static void manager_search(void)
@@ -484,6 +529,9 @@ void manager_poll(void)
         uint32_t found = 0;
 
         if (eeprom_started == 0u) {
+            uint32_t t0 = NOW_CYCLES();
+            uint32_t d;
+
             for (i = 0u; (i < device_count) && (i < DEV_MAX); i++) {
                 if (roms[i][0] == 0x2Du) {
                     found = 1;
@@ -502,10 +550,23 @@ void manager_poll(void)
                 manager_state = MGR_PUBLISH;
                 return;
             }
+            d = NOW_CYCLES() - t0;
+            if (d > eep_start_max) {
+                eep_start_max = d;
+            }
             eeprom_started = 1;
             return;
         }
-        st = ds2431_read_poll(&eeprom);
+        {
+            uint32_t t0 = NOW_CYCLES();
+            uint32_t d;
+
+            st = ds2431_read_poll(&eeprom);
+            d = NOW_CYCLES() - t0;
+            if (d > eep_poll_max) {
+                eep_poll_max = d;
+            }
+        }
         if (st == OW_BUSY) {
             return;
         }
@@ -536,6 +597,13 @@ void manager_poll(void)
         break;
     }
 }
+
+
+
+
+
+
+
 
 
 

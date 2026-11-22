@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Fixed
+- **Bridge:** an expanded command packet terminates its slot buffer. The DMA
+  walks slots `1..N`, so slot `N` is read even though only `N-1` pulses were
+  built; the chunked builder left stale data there, which put one extra bit
+  slot after every DS18B20 and DS2431 command and shifted the reply.
+- **Bridge:** the first byte of a read is written to `DT` before the address
+  handler does any bookkeeping or fault injection, because the master starts
+  shifting it about one SCL bit time after the match.
+- **Bridge:** the transfer direction is sampled after a pending STOP is
+  retired. `STS2.DIRF` used to be read before `i2c_stop_done()`, so a read that
+  followed a register-pointer write could be decoded with the previous frame's
+  direction: the slave ACKed its address, never loaded `DT`, and the master
+  read a whole frame of `0xFF` while the CRC check failed. `stress 50000` at
+  400 kHz now reports 0 torn, 0 invalid and 0 retries.
+- **Bridge:** the SDA-stuck detector now requires SCL to stay idle-high for the
+  whole window. A master that is clocking holds SDA low for many bit times,
+  which used to look like a 10 ms stall and could start `i2c_bus_recover()` in
+  the middle of a transfer.
+
+### Changed
+- **Bridge:** the DS2431 read command and the DS18B20 Convert/Read packets are
+  expanded into timer slots two bytes per call instead of one ten-byte packet.
+  Expanding ten bytes cost 13-14 us of CPU inside a single step; the step is
+  now 1-5 us.
+- **Bridge:** `ow_crc16` is table-driven like `ow_crc8`. The twelve-byte append
+  CRC blocked the CPU for ~4 us.
+- **Bridge:** diagnostics carry the measured worst synchronous manager step in
+  microseconds (`0x79..0x7B`), the worst `ds2431_read_start` and
+  `ds2431_read_poll` (`0x7E..0x7F`), the SDA-stuck recovery count (`0x6D`), the
+  underrun count (`0x6F`) and the transmit position at the last underrun
+  (`0x7C`/`0x7D`).
+- **Tester:** the failure snapshot also prints the slave frame counter next to
+  the host transaction counter, and labels `0x7C`/`0x7D` as `ouf <pos>@<ptr>`.
+- **Tester:** T51 masks the MSB of the first byte. That bit is lost when the
+  slave is late at the address match (it does not drive bit 7 and the pull-up
+  reads 1), which is a property of the polled slave, not of the skip
+  injection the test is checking.
+
 ### Changed
 - **Bridge:** a STOP that has not been serviced yet is finished at the next
   address match, so a command can never be applied to the wrong transaction.

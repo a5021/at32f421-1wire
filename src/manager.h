@@ -38,6 +38,17 @@ extern "C" {
 #define REG_STALL_STATE         0x67u   /* manager state of that call */
 #define REG_STALL_P2            0x68u   /* publish phase 2 max */
 #define REG_STALL_AVG           0x69u   /* publish phase 0/1/2 averages */
+#define REG_DIAG_CRC_FFFF       0x6Cu   /* publishes with a 0xFFFF CRC */
+#define REG_DIAG_BUSY           0x6Du   /* SDA-stuck recoveries */
+#define REG_DIAG_ACK            0x6Eu
+#define REG_DIAG_REASON         0x6Fu   /* transmit underruns (OUF) */
+#define REG_MAX_STEP            0x79u   /* worst manager_poll, us, 16-bit LE */
+#define REG_MAX_STEP_H          0x7Au
+#define REG_MAX_STATE           0x7Bu   /* manager state of that call */
+#define REG_OUF_POS             0x7Cu   /* tx_index when an underrun hit */
+#define REG_OUF_PTR             0x7Du   /* reg_ptr at that moment */
+#define REG_EEP_START           0x7Eu   /* worst ds2431_read_start, us */
+#define REG_EEP_POLL            0x7Fu   /* worst ds2431_read_poll, us */
 #define REG_SCRATCH             0x70u
 #define REG_ROMS                0x80u
 
@@ -95,6 +106,12 @@ void manager_command(uint8_t cmd);
 /* Manager state, injected into REG_MGR at read time (diagnostics). */
 uint8_t manager_state_reg(void);
 
+/* Publish-window diagnostics. */
+bool manager_publish_busy(void);
+uint8_t manager_crc_ffff_count(void);
+uint32_t manager_eep_start_max(void);
+uint32_t manager_eep_poll_max(void);
+
 /* True while the I2C bridge is mid-transaction; overrides the weak stub
  * in manager.c on the real target. */
 bool manager_i2c_busy(void);
@@ -107,3 +124,12 @@ void manager_set_state_for_test(uint32_t state);
 #endif
 
 #endif /* MANAGER_H */
+
+
+
+
+
+
+
+
+

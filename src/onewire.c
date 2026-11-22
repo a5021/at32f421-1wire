@@ -10,6 +10,7 @@ static uint8_t ow_tx[OW_MAX_SLOTS + 1u];
 static volatile uint8_t ow_rx[OW_MAX_SLOTS];
 static volatile uint8_t ow_pair[2];
 static uint16_t ow_rx_slots;
+static uint16_t ow_rx_pos;      /* unpacked bytes, resumed across polls */
 
 /* Search ROM phases. */
 enum {
@@ -68,6 +69,51 @@ ow_status_t ow_write_poll(void)
     return ow_hal_done() ? OW_OK : OW_BUSY;
 }
 
+/* Slot expansion in two-byte steps.  Sixteen slot stores keep the longest
+ * synchronous stretch of a ten-byte command well inside the slave's budget;
+ * the packet itself has no deadline until it is fired. */
+#define OW_TX_CHUNK 2u
+static uint16_t tx_pos;
+
+void ow_tx_reset(void)
+{
+    tx_pos = 0u;
+}
+
+uint16_t ow_tx_build(const uint8_t *data, uint16_t len)
+{
+    uint16_t n = 0u;
+
+    if ((data == 0) || (len == 0u) || (len > OW_MAX_BYTES)) {
+        return 0u;
+    }
+    while ((n < OW_TX_CHUNK) && (tx_pos < len)) {
+        uint8_t b = data[tx_pos];
+        uint16_t k = (uint16_t)(tx_pos * 8u);
+
+        for (uint8_t bit = 0u; bit < 8u; bit++) {
+            ow_tx[k++] = ((b & 1u) != 0u) ? OW_T_LOW1 : OW_T_LOW0;
+            b >>= 1;
+        }
+        tx_pos++;
+        n++;
+    }
+    return (uint16_t)(len - tx_pos);
+}
+
+bool ow_tx_fire(uint16_t len)
+{
+    if ((len == 0u) || (len > OW_MAX_BYTES) || (tx_pos < len) ||
+        ow_hal_busy()) {
+        return false;
+    }
+    /* The DMA walks slots 1..N, so slot N is read even though only N-1
+     * pulses were built.  It must be the terminator, not stale data. */
+    ow_tx[len * 8u] = 0u;
+    ow_hal_feed(ow_tx, (uint16_t)(len * 8u));
+    return true;
+}
+
 bool ow_read_start(uint16_t len)
 {
     if ((len == 0u) || (len > OW_MAX_BYTES) || ow_hal_busy()) {
@@ -75,13 +121,21 @@ bool ow_read_start(uint16_t len)
     }
 
     ow_rx_slots = (uint16_t)(len * 8u);
+    ow_rx_pos = 0u;
     memset((void *)ow_rx, 0xFF, ow_rx_slots);
     ow_hal_read(ow_rx, ow_rx_slots);
     return true;
 }
 
+/* Three bytes per call: unpacking all nine held the CPU longer than the I2C
+ * slave's service budget allows. */
+#define OW_RX_CHUNK 3u
+
 ow_status_t ow_read_poll(uint8_t *dst)
 {
+    uint16_t total = (uint16_t)(ow_rx_slots / 8u);
+    uint16_t end = (uint16_t)(ow_rx_pos + OW_RX_CHUNK);
+
     if (!ow_hal_done()) {
         return OW_BUSY;
     }
@@ -89,7 +143,10 @@ ow_status_t ow_read_poll(uint8_t *dst)
         return OW_BUS_ERROR;
     }
 
-    for (uint16_t i = 0u; i < (ow_rx_slots / 8u); i++) {
+    if (end > total) {
+        end = total;
+    }
+    for (uint16_t i = ow_rx_pos; i < end; i++) {
         uint8_t b = 0u;
         for (uint8_t bit = 0u; bit < 8u; bit++) {
             if (ow_rx[(i * 8u) + bit] <= OW_T_SAMPLE_MAX) {
@@ -98,7 +155,8 @@ ow_status_t ow_read_poll(uint8_t *dst)
         }
         dst[i] = b;
     }
-    return OW_OK;
+    ow_rx_pos = end;
+    return (end < total) ? OW_BUSY : OW_OK;
 }
 
 void ow_search_begin(ow_search_t *s)

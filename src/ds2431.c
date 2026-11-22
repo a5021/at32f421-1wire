@@ -16,6 +16,7 @@
 enum {
     PH_RESET_ARM = 0,
     PH_RESET_WAIT,
+    PH_CMD_BUILD,
     PH_CMD_WAIT,
     PH_READ_WAIT,
     PH_SP_RESET_WAIT,
@@ -159,6 +160,7 @@ ow_status_t ds2431_read_poll(ds2431_t *d)
     switch (d->phase) {
     case PH_RESET_ARM:
         ow_reset_start();
+        d->cmd_len = (uint8_t)read_cmd(d, d->sp);
         d->phase = PH_RESET_WAIT;
         return OW_BUSY;
 
@@ -172,17 +174,21 @@ ow_status_t ds2431_read_poll(ds2431_t *d)
             d->phase = PH_DONE;
             return OW_NO_PRESENCE;
         }
-        {
-            uint8_t cmd[12];
-            uint16_t n = read_cmd(d, cmd);
-            if (!ow_write_start(cmd, n)) {
-                d->phase = PH_DONE;
-                return OW_PARAM;
-            }
+        ow_tx_reset();
+        d->phase = PH_CMD_BUILD;
+        return OW_BUSY;
+    }
+
+    case PH_CMD_BUILD:
+        if (ow_tx_build(d->sp, d->cmd_len) != 0u) {
+            return OW_BUSY;
+        }
+        if (!ow_tx_fire(d->cmd_len)) {
+            d->phase = PH_DONE;
+            return OW_PARAM;
         }
         d->phase = PH_CMD_WAIT;
         return OW_BUSY;
-    }
 
     case PH_CMD_WAIT: {
         ow_status_t st = ow_write_poll();

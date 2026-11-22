@@ -190,6 +190,12 @@ never mistaken for a bit error.
 `cmd 4` freezes the manager and `cmd 5` resumes it. A run with the manager
 paused is the control experiment: a static map and no 1-Wire current at all.
 
+The failure snapshot ends with `ouf <pos>@<ptr> frames <n> txn <n>`: the
+transmit index and register pointer when the last underrun hit, then the
+slave's matched-address counter next to the host's own transaction count. Equal
+counters mean the address was matched and the fault is in the transmit path; a
+gap means the address phase was lost.
+
 ### Bus health (T43-T47)
 
 The slave reports matched addresses and sticky error flags; the tester

@@ -30,7 +30,18 @@ Canonical description of the I2C slave register file exposed by
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
 | `0x63` | 2 | `REG_MAP_CRC` | CRC-16/CCITT over the snapshot, little-endian |
 | `0x65` | 1 | `REG_MGR` | Manager state, `0x80` set while paused (see below) |
+| `0x66..0x6B` | 6 | `REG_STALL*` | Worst and average publish-phase durations, microseconds |
+| `0x6C` | 1 | `REG_DIAG_CRC_FFFF` | Publishes whose map CRC came out `0xFFFF` |
+| `0x6D` | 1 | `REG_DIAG_BUSY` | SDA-stuck recoveries performed |
+| `0x6E` | 1 | `REG_DIAG_ACK` | ACK-failure count, modulo 256 |
+| `0x6F` | 1 | `REG_DIAG_REASON` | Transmit underruns (OUF), saturating |
 | `0x70..0x78` | 9 | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
+| `0x79..0x7A` | 2 | `REG_MAX_STEP` | Worst synchronous manager step, microseconds (LE) |
+| `0x7B` | 1 | `REG_MAX_STATE` | Manager state of that step |
+| `0x7C` | 1 | `REG_OUF_POS` | `tx_index` when the last underrun hit |
+| `0x7D` | 1 | `REG_OUF_PTR` | `reg_ptr` at that moment |
+| `0x7E` | 1 | `REG_EEP_START` | Worst `ds2431_read_start`, microseconds |
+| `0x7F` | 1 | `REG_EEP_POLL` | Worst `ds2431_read_poll`, microseconds |
 | `0x80..0xFF` | 128 | `REG_ROMS` | 16 × 8-byte ROM table |
 
 ## Flags (`REG_FLAGS`)
@@ -133,8 +144,8 @@ computing the same CRC:
 | `0x02` | `REG_FLAGS`: the busy bit toggles outside `publish()` |
 | `0x08` | `REG_SEQ`: intentionally odd while a publish is in progress |
 | `0x09..0x0F` | health block and `REG_SPEED`, injected at read time |
-| `0x60..0x64` | command latch, selection, fault and the CRC itself |
-| `0x65` | `REG_MGR`: the manager state is live diagnostics |
+| `0x60..0x6F` | command latch, selection, fault, the CRC itself and the live diagnostics |
+| `0x79..0x7F` | worst-step and EEPROM timing counters, live |
 
 Everything else (header counts, temperatures, statuses, EEPROM block,
 scratchpad, ROM table) changes only inside `publish()`, so a stable `REG_SEQ`
