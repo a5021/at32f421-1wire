@@ -182,12 +182,19 @@ static bool crc_skip(uint32_t i)
 /* One 64-byte quarter of the 256-byte map, copied in words.  The whole map is
  * four chunks: a full copy measured 14 us, which sits on the slave's ~20 us
  * service budget at 400 kHz. */
+/* One 16-byte slice of the map, copied in words.  A 64-byte quarter measured
+ * ~10 us together with the commit and blocked the polled I2C service long
+ * enough to lose bytes at 400 kHz. */
+#define PUB_COPY    16u
+#define PUB_CRC      8u
+#define PUB_COMMIT   8u
+
 static void map_copy_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
 {
     uint32_t *d = (uint32_t *)(void *)(dst + pos);
     const uint32_t *s = (const uint32_t *)(const void *)(src + pos);
 
-    for (uint32_t i = 0u; i < 16u; i++) {
+    for (uint32_t i = 0u; i < (PUB_COPY / 4u); i++) {
         d[i] = s[i];
     }
 }
@@ -197,7 +204,7 @@ static void map_copy_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
  * host write made in the middle of the copy. */
 static void map_commit_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
 {
-    uint32_t end = pos + 64u;
+    uint32_t end = pos + PUB_COMMIT;
 
     for (uint32_t i = pos; i < end; i++) {
         if ((i >= REG_CMD) && (i <= REG_FAULT)) {
@@ -287,7 +294,7 @@ static void publish_step(void){
     switch (pub_phase) {
     case 0u:
         map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
-        pub_pos += 64u;
+        pub_pos += PUB_COPY;
         if (pub_pos >= 256u) {
             publish_fill(shadow);
             pub_crc = 0xFFFFu;
@@ -297,7 +304,7 @@ static void publish_step(void){
         break;
 
     case 1u: {
-        uint32_t end = pub_pos + 32u;
+        uint32_t end = pub_pos + PUB_CRC;
 
         if (end > 256u) {
             end = 256u;
@@ -336,7 +343,7 @@ static void publish_step(void){
             g_regs[REG_SEQ] = ++pub_seq;    /* odd: update in progress */
         }
         map_commit_chunk((uint8_t *)g_regs, (const uint8_t *)shadow, pub_pos);
-        pub_pos += 64u;
+        pub_pos += PUB_COMMIT;
         if (pub_pos >= 256u) {
             cycle = cycle_next;
             g_regs[REG_SEQ] = ++pub_seq;    /* even: snapshot stable */

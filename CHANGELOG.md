@@ -10,7 +10,7 @@
   0-6 value differences in 20 000 reads; with the manager running, 1 per
   200 000 single-byte reads, but a 10 us manager step still causes 60 underruns
   in `stress 20000`.
-- **Bridge:** the I2C byte service can run from interrupt or poll
+- **Bridge:** publish chunks are 16/8/8 bytes (copy/CRC/commit) instead of 64/32/64: the worst manager step fell from 10 us to 7 us and the bottleneck moved to the sensor read poll (`MGR_READ`, subphase 6), which is the next slice. `stress 20000` at 400 kHz still reports underruns, so the polled 400 kHz path is not closed yet.'n- **Bridge:** the I2C byte service can run from interrupt or poll
   (`I2C_USE_IRQ`), the state machine is shared.
 - **Bridge:** the byte service (`i2c_poll`, `reg_byte`, `i2c_send_byte` and the
   ISR wrapper) is copied to SRAM at boot (`.ramfunc`): flash wait states alone
@@ -220,3 +220,4 @@ failures.
 
 Non-blocking, interrupt-free TMR1 + DMA1 engine for DS18B20 and DS2431 on
 AT32F421F8P7, CH341A-based I2C host demo.
+
