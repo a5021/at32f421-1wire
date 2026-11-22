@@ -206,10 +206,8 @@ void suite_fault(void)
         bool shifted = false;
 
         /* The skipped byte is the first one, so the stream starts at VERSION
-         * instead of MAGIC.  A single read can also lose the MSB of the first
-         * byte if the CPU was late at the address match (the slave then does
-         * not drive bit 7, and the pull-up reads it as 1), so the MSB is
-         * masked out: this test is about the shift, not about that race. */
+         * instead of MAGIC.  The value must be exact: a masked comparison
+         * would hide a lost MSB, which is a real defect, not a test artifact. */
         for (int attempt = 0; (attempt < 3) && !shifted; attempt++) {
             memset(v, 0, sizeof(v));
             if (!bus_fault(FAULT_SKIP_BYTE)) {
@@ -218,7 +216,7 @@ void suite_fault(void)
             if (bus_read_reg(REG_MAGIC, v, sizeof(v)) != (int)sizeof(v)) {
                 continue;
             }
-            shifted = ((v[0] & 0x7Fu) == BRIDGE_VERSION);
+            shifted = (v[0] == BRIDGE_VERSION);
         }
 
         if (!shifted) {

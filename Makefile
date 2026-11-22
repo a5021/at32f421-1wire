@@ -82,6 +82,11 @@ $(BUILD):
 $(BUILD)/%.o: %.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# The I2C service is copied to SRAM (section .text.ramfunc); LTO drops section
+# attributes on static functions, so this one file is compiled without it.
+$(BUILD)/main.o: app/main.c | $(BUILD)
+	$(CC) $(CFLAGS) -fno-lto -c $< -o $@
+
 $(BUILD)/startup_at32f421.o: $(ASM_SRC) | $(BUILD)
 	$(CC) $(MCU) -c -x assembler-with-cpp $< -o $@
 

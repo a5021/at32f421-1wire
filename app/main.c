@@ -9,6 +9,14 @@
 #include "ds18b20.h"
 #include "ds2431.h"
 
+/* 1: the I2C slave is byte-served from I2C2 event/error interrupts.  0: the
+ * main loop polls it.  The state machine is the same code either way, so the
+ * two modes can be compared without rewriting the logic.  The 1-Wire engine
+ * stays polled either way. */
+#ifndef I2C_USE_IRQ
+#define I2C_USE_IRQ 1
+#endif
+
 #define I2C_ADDR7               0x42u
 #define I2C_OADDR1              ((uint16_t)(I2C_ADDR7 << 1))
 
@@ -26,11 +34,28 @@ extern volatile uint32_t g_i2c_speed;
 
 extern uint8_t g_regs[256];
 extern uint32_t pub_phase_max[3];
-static uint8_t diag_ack;
-static uint8_t diag_recoveries;
+static uint8_t diag_ack;static uint8_t diag_recoveries;
 static uint8_t diag_ouf_count;
 static uint8_t diag_ouf_pos;
 static uint8_t diag_ouf_ptr;
+/* Underrun forensics: classify the flag by the state of the frame when it hit. */
+static uint8_t  diag_ouf_end;
+static uint8_t  diag_ouf_mid;
+static uint8_t  diag_ouf_sts1;
+static uint8_t  diag_ouf_sts2;
+static uint8_t  diag_ouf_age;
+static uint32_t last_dt_cycles;
+static uint8_t  diag_slow_count;
+static uint8_t  diag_slow_us;
+static uint8_t  diag_slow_state;
+static uint8_t  diag_slow_sub;
+static uint8_t  max_sub;
+static uint32_t slow_limit_cycles;  /* 20 us in cycles, set at boot */
+static uint8_t  diag_addr_stale;    /* ADDR seen again while still transmitting */
+static uint8_t  diag_dt_full;       /* address matched while DT still held a byte */
+static uint8_t  diag_ouf_act, diag_ouf_act_dt, diag_ouf_act2, diag_ouf_act_dt2;
+static uint8_t  act_prev, act_prev2, act_dt, act_dt2;
+static uint32_t act_t;
 static uint16_t max_step_latch;     /* us, latched so the two bytes agree */
 extern uint32_t pub_phase_sum[3];
 extern uint32_t pub_phase_cnt[3];
@@ -39,9 +64,14 @@ extern uint32_t publish_all_cycles;
 extern uint32_t publish_crc_cycles;
 
 static uint32_t reg_ptr;
-static uint32_t rx_mode;
-static uint32_t tx_mode;
+static volatile uint32_t rx_mode;
+static volatile uint32_t tx_mode;
 static uint32_t first_byte;
+static uint32_t service_t0;         /* DWT cycle at the last service entry */
+static uint32_t isr_max_cycles;
+static uint32_t addr_dt_max_cycles;
+static uint8_t  first_byte_pre;     /* value for the next read's first byte */
+static volatile uint8_t first_byte_ok;
 static int      pending_speed = -1;
 static uint8_t  pending_cmd;
 
@@ -102,6 +132,18 @@ static uint8_t sat_inc(uint8_t v)
     return (v == 0xFFu) ? v : (uint8_t)(v + 1u);
 }
 
+static void note_act(uint8_t code)
+{
+    uint32_t now = DWT->CYCCNT;
+    uint32_t us = (now - act_t) / cycles_per_us;
+
+    act_prev2 = act_prev;
+    act_dt2 = act_dt;
+    act_prev = code;
+    act_dt = (uint8_t)((us > 255u) ? 255u : us);
+    act_t = now;
+}
+
 static void timebase_init(void)
 {
     /* HCLK/8 counts a millisecond without any interrupt; the main loop reads
@@ -148,6 +190,7 @@ static void calibrate_cycles(void)
 /* Values that live outside the published snapshot: publish() memsets g_regs
  * every 1-Wire cycle, so they are injected when the byte is handed to the
  * master instead of being stored in the map. */
+__attribute__((section(".ramfunc"), noinline, used))
 static uint8_t reg_byte(uint32_t addr)
 {
     switch (addr & 0xFFu) {
@@ -219,6 +262,58 @@ static uint8_t reg_byte(uint32_t addr)
         return (uint8_t)(max_step_latch >> 8);
     case REG_MAX_STATE:
         return max_state;
+    case REG_MAX_SUB:
+        return max_sub;
+    case REG_OUF_END:
+        return diag_ouf_end;
+    case REG_OUF_MID:
+        return diag_ouf_mid;
+    case REG_ISR_MAX: {
+        uint32_t us = isr_max_cycles / cycles_per_us;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
+    case REG_ADDR_DT: {
+        uint32_t us = addr_dt_max_cycles / cycles_per_us;
+
+        return (uint8_t)((us > 255u) ? 255u : us);
+    }
+    case REG_OUF_STS2:
+        return diag_ouf_sts2;
+    case REG_OUF_STS1:
+        return diag_ouf_sts1;
+    case REG_OUF_AGE:
+        return diag_ouf_age;
+    case REG_OUF_REG_PTR:
+        return diag_ouf_ptr;
+    case REG_SLOW_COUNT:
+        return diag_slow_count;
+    case REG_SLOW_US:
+        return diag_slow_us;
+    case REG_SLOW_STATE:
+        return diag_slow_state;
+    case REG_SLOW_SUB:
+        return diag_slow_sub;
+    case REG_ACT_PREV:
+        return act_prev;
+    case REG_ACT_DT:
+        return act_dt;
+    case REG_ACT_PREV2:
+        return act_prev2;
+    case REG_ACT_DT2:
+        return act_dt2;
+    case REG_ADDR_STALE:
+        return diag_addr_stale;
+    case REG_DT_FULL:
+        return diag_dt_full;
+    case REG_OUF_ACT:
+        return diag_ouf_act;
+    case REG_OUF_ACT_DT:
+        return diag_ouf_act_dt;
+    case REG_OUF_ACT2:
+        return diag_ouf_act2;
+    case REG_OUF_ACT_DT2:
+        return diag_ouf_act_dt2;
     case REG_OUF_POS:
         return diag_ouf_pos;
     case REG_OUF_PTR:
@@ -255,6 +350,34 @@ static void health_clear(void)
     fault_edges = 0u;
     stall_armed = 0u;
     tx_index = 0u;
+    /* Diagnostics are only meaningful as deltas, so a counter reset must
+     * clear the forensics too. */
+    diag_ouf_end = 0u;
+    diag_ouf_mid = 0u;
+    diag_ouf_count = 0u;
+    diag_ouf_sts1 = 0u;
+    diag_ouf_sts2 = 0u;
+    diag_ouf_age = 0u;
+    diag_ouf_pos = 0u;
+    diag_ouf_ptr = 0u;
+    diag_ouf_act = 0u;
+    diag_ouf_act_dt = 0u;
+    diag_ouf_act2 = 0u;
+    diag_ouf_act_dt2 = 0u;
+    diag_dt_full = 0u;
+    diag_addr_stale = 0u;
+    diag_slow_count = 0u;
+    diag_slow_us = 0u;
+    diag_slow_state = 0u;
+    diag_slow_sub = 0u;
+    diag_ack = 0u;
+    diag_recoveries = 0u;
+    isr_max_cycles = 0u;
+    addr_dt_max_cycles = 0u;
+    act_prev = 0u;
+    act_prev2 = 0u;
+    act_dt = 0u;
+    act_dt2 = 0u;
 }
 
 static void fault_apply(uint8_t code)
@@ -335,6 +458,9 @@ static void i2c_apply_speed(uint32_t scl_hz)
     I2C2->clkctrl_bit.speed = speed;
     I2C2->tmrise_bit.risetime = rise;
 
+    /* The peripheral must be enabled before ACK and stretch are armed: with
+     * stretch set first, address recognition stops working (every frame is
+     * NACKed, measured). */
     I2C2->ctrl1_bit.i2cen = 1;
     I2C2->ctrl1_bit.acken = 1;
     I2C2->ctrl1_bit.stretch = 1;
@@ -359,6 +485,21 @@ static void i2c_hw_init(void)
     I2C2->oaddr1_bit.addr1mode = 0;
 
     i2c_apply_speed(g_scl_hz);
+
+#if I2C_USE_IRQ
+    /* Address/stop and error events run at the highest priority: they are the
+     * only interrupts in the system, the 1-Wire engine stays polled.  The data
+     * interrupt is armed per frame in the address handler. */
+    NVIC_SetPriority(I2C2_EVT_IRQn, 0u);
+    NVIC_SetPriority(I2C2_ERR_IRQn, 0u);
+    I2C2->ctrl2_bit.dataien = 0u;
+    I2C2->ctrl2_bit.evtien = 1u;
+    I2C2->ctrl2_bit.errien = 1u;
+    NVIC_ClearPendingIRQ(I2C2_EVT_IRQn);
+    NVIC_ClearPendingIRQ(I2C2_ERR_IRQn);
+    NVIC_EnableIRQ(I2C2_EVT_IRQn);
+    NVIC_EnableIRQ(I2C2_ERR_IRQn);
+#endif
 }
 
 static void spin_us(uint32_t us)
@@ -374,6 +515,12 @@ static void spin_us(uint32_t us)
  * cannot be talking: driving the pins here is safe. */
 static void i2c_bus_recover(void)
 {
+#if I2C_USE_IRQ
+    /* The rebuild below disables the peripheral; an interrupt in that window
+     * would service a frame that no longer exists. */
+    NVIC_DisableIRQ(I2C2_EVT_IRQn);
+    NVIC_DisableIRQ(I2C2_ERR_IRQn);
+#endif
     I2C2->ctrl1_bit.i2cen = 0;
 
     GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000066u;  /* OD output */
@@ -420,6 +567,12 @@ static void i2c_bus_recover(void)
     if ((GPIOA->idt & SDA_BIT) != 0u) {
         g_health |= HEALTH_RECOVERED;
     }
+#if I2C_USE_IRQ
+    NVIC_ClearPendingIRQ(I2C2_EVT_IRQn);
+    NVIC_ClearPendingIRQ(I2C2_ERR_IRQn);
+    NVIC_EnableIRQ(I2C2_EVT_IRQn);
+    NVIC_EnableIRQ(I2C2_ERR_IRQn);
+#endif
 }
 
 /* SDA held low outside any transaction means somebody, most likely this slave
@@ -472,6 +625,7 @@ static void bus_health_poll(void)
 /* Hand one snapshot byte to the master, applying a one-shot injected fault.
  * Both the address-match byte and the TDBE byte go through here, otherwise a
  * one-byte read would never see the fault. */
+__attribute__((section(".ramfunc"), noinline, used))
 static void i2c_send_byte(void)
 {
     uint8_t v = reg_byte(reg_ptr);
@@ -496,6 +650,7 @@ static void i2c_send_byte(void)
         }
     }
     I2C2->dt = v;
+    last_dt_cycles = DWT->CYCCNT;
     reg_ptr = (reg_ptr + 1u) & 0xFFu;
 }
 
@@ -506,6 +661,7 @@ static void i2c_send_byte(void)
 static void i2c_stop_done(void){
     (void)I2C2->sts1;
     I2C2->ctrl1_bit.i2cen = 1;
+    I2C2->ctrl2_bit.dataien = 0u;
     rx_mode = 0u;
     tx_mode = 0u;
     first_byte = 0u;
@@ -537,28 +693,56 @@ static void i2c_stop_done(void){
         manager_command(pending_cmd);
         pending_cmd = 0u;
     }
-    if (pending_speed >= 0) {
-        i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
-        pending_speed = -1;
-    }
+    /* A speed change disables and re-enables the peripheral, so it is applied
+     * from the main loop when the bus is idle, not here: the master may start
+     * the next transaction immediately after this STOP. */
 }
 
+__attribute__((section(".ramfunc"), noinline, used))
 static void i2c_poll(void)
 {
-    uint32_t sts1 = I2C2->sts1;
-    uint32_t relevant = sts1 & ~STS1_TDBE;
+    uint32_t sts2;
+    uint32_t sts1;
+    uint32_t relevant;
+
+    service_t0 = DWT->CYCCNT;
+    sts1 = I2C2->sts1;
+    relevant = sts1 & ~STS1_TDBE;
 
     /* An underrun has to be handled before another byte is served, otherwise
      * the recorded position belongs to a later frame. */
     if ((sts1 & STS1_OUF) != 0u) {
+        uint32_t age;
+
+        diag_ouf_act = act_prev;
+        diag_ouf_act_dt = act_dt;
+        diag_ouf_act2 = act_prev2;
+        diag_ouf_act_dt2 = act_dt2;
+        note_act(8u);
         diag_ouf_pos = (uint8_t)tx_index;
         diag_ouf_ptr = (uint8_t)reg_ptr;
+        diag_ouf_sts1 = (uint8_t)(sts1 >> 8);
+        diag_ouf_sts2 = (uint8_t)I2C2->sts2;
+        age = (DWT->CYCCNT - last_dt_cycles) / cycles_per_us;
+        diag_ouf_age = (uint8_t)((age > 255u) ? 255u : age);
+        /* An underrun that arrives together with the master's NACK or STOP is
+         * the end of a frame; one without them lost a byte mid-transfer. */
+        if ((sts1 & (STS1_ACKFAIL | STS1_STOPF)) != 0u) {
+            if (diag_ouf_end != 0xFFu) {
+                diag_ouf_end++;
+            }
+        } else {
+            if (diag_ouf_mid != 0xFFu) {
+                diag_ouf_mid++;
+            }
+        }
         if (diag_ouf_count != 0xFFu) {
             diag_ouf_count++;
         }
         g_i2c_err_ouf++;
         g_health |= HEALTH_OUF;
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
+        I2C2->ctrl2_bit.dataien = 0u;
         pending_cmd = 0;
         pending_speed = -1;
         rx_mode = 0;
@@ -572,21 +756,48 @@ static void i2c_poll(void)
     }
 
     if ((sts1 & STS1_ADDR7F) != 0u) {
-        uint32_t sts2;
+        uint32_t dt0;
 
-        /* A STOP from the previous transaction may still be pending if the
-         * master did not wait for it; finish it before starting the new one. */
+        /* Retire a pending STOP, but do not call the full retire path when
+         * there is none: with interrupts the STOP is normally already
+         * serviced, and that call alone costs most of the 1.3 us window. */
         if ((sts1 & STS1_STOPF) != 0u) {
             i2c_stop_done();
+        } else if (tx_mode != 0u) {
+            if (diag_addr_stale != 0xFFu) {
+                diag_addr_stale++;
+            }
         }
+        I2C2->sts1 = (uint32_t)~(STS1_ACKFAIL & 0x0000DF00u);
 
+        /* Retire ADDR (read STS1 then STS2) and load the first byte as the
+         * very next action: the master's first clock follows the release by
+         * less than two microseconds.  The value was computed when the
+         * register pointer arrived, so no lookup happens here. */
         (void)I2C2->sts1;
-        /* Direction must be sampled after the STOP is retired.  Sampled
-         * before, it can still describe the previous frame: a write (the
-         * register-pointer write) followed by a read then decodes as a write,
-         * the slave never loads DT, and the master reads a whole frame of
-         * 0xFF with the address happily ACKed. */
         sts2 = I2C2->sts2;
+        if ((sts2 & STS2_DIRF) != 0u) {
+            tx_mode = 1;
+            rx_mode = 0;
+            if ((first_byte_ok != 0u) && (fault_next == 0u)) {
+                I2C2->dt = first_byte_pre;
+                last_dt_cycles = DWT->CYCCNT;
+                first_byte_ok = 0u;
+                tx_index = 1u;
+                reg_ptr = (reg_ptr + 1u) & 0xFFu;
+            } else {
+                tx_index = 0u;
+                i2c_send_byte();
+            }
+            dt0 = DWT->CYCCNT - service_t0;
+            if (dt0 > addr_dt_max_cycles) {
+                addr_dt_max_cycles = dt0;
+            }
+        } else {
+            rx_mode = 1;
+            tx_mode = 0;
+            first_byte = 1;
+        }
 
         g_frames++;                 /* one matched address = one transaction */
         last_frame_ms = g_ms;
@@ -594,19 +805,17 @@ static void i2c_poll(void)
             g_frames--;
             fault_drop_frame = 0u;
         }
-        /* Direction first: the master starts shifting the first byte within
-         * about one SCL bit time of the address match, and the slave loses the
-         * MSB if DT is not loaded by then. */
-        if ((sts2 & STS2_DIRF) != 0u) {
-            tx_mode = 1;
-            rx_mode = 0;
-            tx_index = 0u;
-            i2c_send_byte();
-        } else {
+
+        if ((sts2 & STS2_DIRF) == 0u) {
             rx_mode = 1;
             tx_mode = 0;
             first_byte = 1;
         }
+        /* Data-phase events (TDBE/RDBF) are only interesting while a frame is
+         * being served; arming them here keeps an idle empty transmitter from
+         * raising an endless interrupt. */
+        I2C2->ctrl2_bit.dataien = 1u;
+        note_act(1u);
 
         if (fault_current != 0u) {
             fault_current = 0u;
@@ -621,11 +830,14 @@ static void i2c_poll(void)
         return;
     }
 
-    if ((rx_mode != 0u) && ((sts1 & STS1_RDBF) != 0u)) {
+    if ((sts1 & STS1_RDBF) != 0u) {
+        if (rx_mode != 0u) {
         uint8_t b = (uint8_t)I2C2->dt;
 
         if (first_byte != 0u) {
             reg_ptr = b;
+            first_byte_pre = reg_byte(b);
+            first_byte_ok = 1u;
             first_byte = 0;
         } else {
             /* Only REG_SPEED and REG_CMD are writable.  Everything else is a
@@ -646,34 +858,54 @@ static void i2c_poll(void)
             }
             reg_ptr = (reg_ptr + 1u) & 0xFFu;
         }
-        return;
-    }
-
-    if ((tx_mode != 0u) && ((sts1 & STS1_TDBE) != 0u)) {
-        i2c_send_byte();
+        }
+        note_act(2u);
         return;
     }
 
     if ((sts1 & STS1_STOPF) != 0u) {
+        note_act(4u);
         i2c_stop_done();
         return;
     }
 
+    /* The master has NACKed, so the frame is over.  Do not refill the
+     * transmit register: a byte left there is never sent, and the next frame
+     * would then find DT full and lose its own first byte. */
     if ((sts1 & STS1_ACKFAIL) != 0u) {
+        note_act(5u);
         g_i2c_err_ack++;
         diag_ack = (uint8_t)g_i2c_err_ack;
-        /* Do not drop tx_mode here: a NACK at the end of a read is normal and
-         * the master just stops clocking, but a NACK lost in the middle of a
-         * transfer must not silence the rest of the frame. */
         I2C2->sts1 = (uint32_t)~(STS1_ACKFAIL & 0x0000DF00u);
+        I2C2->ctrl2_bit.dataien = 0u;
+        tx_mode = 0;
+        rx_mode = 0;
+        first_byte = 0;
+        return;
+    }
+
+    if ((sts1 & STS1_TDBE) != 0u) {
+        if (tx_mode != 0u) {
+            i2c_send_byte();
+            note_act(3u);
+            return;
+        }
+        if (rx_mode == 0u) {
+            /* Idle transmitter with an empty buffer: stop the data interrupt
+             * until the next address arms it again. */
+            I2C2->ctrl2_bit.dataien = 0u;
+        }
+        return;
     }
     if ((sts1 & STS1_BUSERR) != 0u) {
+        note_act(6u);
         g_i2c_err_bus++;
         g_err_bus = sat_inc(g_err_bus);
         g_health |= HEALTH_BUSERR;
         I2C2->sts1 = (uint32_t)~(STS1_BUSERR & 0x0000DF00u);
     }
     if ((sts1 & STS1_ARLOST) != 0u) {
+        note_act(7u);
         g_i2c_err_arl++;
         g_health |= HEALTH_ARLOST;
         I2C2->sts1 = (uint32_t)~(STS1_ARLOST & 0x0000DF00u);
@@ -684,10 +916,11 @@ static void i2c_poll(void)
     /* An aborted transfer must not leave a command or a speed change armed
      * for the next STOP, which belongs to somebody else's transaction. */
     /* A broken frame drops the transfer: BUSERR/ARLOST mean the protocol is
-     * out of sync, and this peripheral does not recover a read that was left
-     * transmitting (keeping tx_mode after OUF/ACKFAIL made the following
-     * frames corrupt, measured at 400 kHz). */
-    if ((sts1 & (STS1_ACKFAIL | STS1_BUSERR | STS1_ARLOST | STS1_OUF)) != 0u) {
+     * out of sync.  ACKFAIL is deliberately not listed: a NACK ends a read
+     * normally, and the following frame may start before the STOP is seen.
+     * Dropping tx_mode there silently lost the second byte of short reads. */
+    if ((sts1 & (STS1_BUSERR | STS1_ARLOST | STS1_OUF)) != 0u) {
+        I2C2->ctrl2_bit.dataien = 0u;
         pending_cmd = 0;
         pending_speed = -1;
         rx_mode = 0;
@@ -696,11 +929,55 @@ static void i2c_poll(void)
     }
 }
 
+#if I2C_USE_IRQ
+/* Both vectors run the same service routine: the state machine is identical
+ * to the polled path, only the dispatch differs.  Nothing else in the system
+ * uses interrupts, so this is the highest priority and never nests. */
+__attribute__((section(".ramfunc"), noinline, used))
+static void i2c_isr(void)
+{
+    uint32_t t0 = DWT->CYCCNT;
+    uint32_t d;
+
+    i2c_poll();
+
+    d = DWT->CYCCNT - t0;
+    if (d > isr_max_cycles) {
+        isr_max_cycles = d;
+    }
+}
+
+void I2C2_EVT_IRQHandler(void)
+{
+    i2c_isr();
+}
+
+void I2C2_ERR_IRQHandler(void)
+{
+    i2c_isr();
+}
+#endif
+
+extern uint32_t _sramfunc[], _eramfunc[], _siramfunc[];
+
+/* Copy the time-critical I2C service from its flash load address to SRAM. */
+static void ramfunc_init(void)
+{
+    uint32_t *d = _sramfunc;
+    const uint32_t *s = _siramfunc;
+
+    while (d < _eramfunc) {
+        *d++ = *s++;
+    }
+}
+
 int main(void)
 {
     clock_config();
     timebase_init();
     calibrate_cycles();
+    slow_limit_cycles = 20u * cycles_per_us;
+    ramfunc_init();
     ow_hal_init();
     i2c_hw_init();
 
@@ -709,7 +986,13 @@ int main(void)
     for (;;) {
         timebase_poll();
         bus_health_poll();
+#if !I2C_USE_IRQ
         i2c_poll();
+#endif
+        if ((pending_speed >= 0) && !i2c_active()) {
+            i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
+            pending_speed = -1;
+        }
         if (!i2c_active()) {
             uint8_t st = (uint8_t)(manager_state_reg() & 0x0Fu);
             uint32_t t0 = DWT->CYCCNT;
@@ -717,9 +1000,20 @@ int main(void)
             manager_poll();
             uint32_t d = DWT->CYCCNT - t0;
 
+            if (d > slow_limit_cycles) {
+                uint32_t us = d / cycles_per_us;
+
+                if (diag_slow_count != 0xFFu) {
+                    diag_slow_count++;
+                }
+                diag_slow_us = (uint8_t)((us > 255u) ? 255u : us);
+                diag_slow_state = st;
+                diag_slow_sub = manager_subphase();
+            }
             if (d > max_cycles) {
                 max_cycles = d;
                 max_state = st;         /* state the call started in */
+                max_sub = manager_subphase();
             }
         }
     }
@@ -734,6 +1028,11 @@ void HardFault_Handler(void)
 void MemManage_Handler(void) __attribute__((alias("HardFault_Handler")));
 void BusFault_Handler(void) __attribute__((alias("HardFault_Handler")));
 void UsageFault_Handler(void) __attribute__((alias("HardFault_Handler")));
+
+
+
+
+
 
 
 

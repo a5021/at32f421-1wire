@@ -25,6 +25,7 @@ Canonical description of the I2C slave register file exposed by
 | `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
 | `0x40..0x47` | 8 | `REG_EEPROM` | Last DS2431 read block |
 | `0x48` | 1 | `REG_EEPROM_STATUS` | DS2431 status (`0x00` = OK, `0xFF` = invalid) |
+| `0x49..0x5F` | 23 | diagnostics | Live counters, injected at read time and excluded from the map CRC (see below) |
 | `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters, `4` = pause, `5` = resume (writable) |
 | `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed (writable) |
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
@@ -144,6 +145,7 @@ computing the same CRC:
 | `0x02` | `REG_FLAGS`: the busy bit toggles outside `publish()` |
 | `0x08` | `REG_SEQ`: intentionally odd while a publish is in progress |
 | `0x09..0x0F` | health block and `REG_SPEED`, injected at read time |
+| `0x49..0x5F` | live diagnostics: underrun forensics, ISR latency, service time |
 | `0x60..0x6F` | command latch, selection, fault, the CRC itself and the live diagnostics |
 | `0x79..0x7F` | worst-step and EEPROM timing counters, live |
 

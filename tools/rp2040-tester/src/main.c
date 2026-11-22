@@ -39,6 +39,8 @@ void suite_stress(void);
 void suite_fault(void);
 int  fuzz_run(uint32_t seed, uint32_t ops, uint32_t *digest);
 void stress_run(uint32_t count);
+void repeat_run(uint8_t reg, uint32_t len, uint32_t n);
+void diag_run(void);
 void couple_run(uint32_t count);
 void stall_run(uint32_t count);
 
@@ -830,6 +832,8 @@ static const cmd_desc_t command_table[] = {
     { "bench", "bench", "100 vs 400 kHz read time" },
     { "watch", "watch temp|status|cycle", "1 Hz display until a key" },
     { "stress", "stress [n]", "n map reads at the current link speed" },
+    { "repeat", "repeat <reg> <len> <n>", "n reads of one register block, with underrun counters" },
+    { "diag", "diag", "underrun forensics, one register per transaction" },
     { "couple", "couple [n]", "same, with a strong 1-Wire load in every frame" },
     { "stall", "stall [n]", "same, with a 200 us CPU stall at byte 64" },
     { "rawspeed", "rawspeed <hz>", "set the master clock directly (calibration)" },
@@ -1045,6 +1049,23 @@ static void handle_line(char *line)
                                           : 1000u;
 
         stress_run(count == 0u ? 1000u : count);
+        return;
+    }
+    if (strcmp(cmd, "diag") == 0) {
+        diag_run();
+        return;
+    }
+    if (strcmp(cmd, "repeat") == 0) {
+        char *end = NULL;
+        unsigned long reg = strtoul(arg, &end, 0);
+        unsigned long len = (end != NULL) ? strtoul(end, &end, 0) : 0ul;
+        unsigned long n = (end != NULL) ? strtoul(end, &end, 0) : 0ul;
+
+        if ((end == NULL) || (*end != '\0') || (reg > 255ul)) {
+            printf("usage: repeat <reg> <len> <count>\n");
+        } else {
+            repeat_run((uint8_t)reg, (uint32_t)len, (uint32_t)n);
+        }
         return;
     }
     if (strcmp(cmd, "couple") == 0) {

@@ -335,9 +335,12 @@ static void stress_loop(uint32_t count, int mode, const char *label)
     uint32_t max_us = 0u;
     uint32_t good = 0u;
     uint32_t errors = 0u;
+    uint8_t  ouf0[3] = { 0u, 0u, 0u };
+    uint8_t  ouf1[3] = { 0u, 0u, 0u };
 
     g_abort = false;
     bus_stats_reset();
+    (void)bus_read_reg(REG_OUF_END, ouf0, sizeof(ouf0));
     g_transport = 0u;
     g_validate = 0u;
     g_retries = 0u;
@@ -379,12 +382,20 @@ static void stress_loop(uint32_t count, int mode, const char *label)
 
     {
         uint8_t ms[7];
+        uint8_t f[13];
 
         if (bus_read_reg(REG_MAX_STEP, ms, sizeof(ms)) == (int)sizeof(ms)) {
             printf("max manager step: %u us, state %u; ouf %u@%u; "
                    "eep start %u us, poll %u us\n",
                    (unsigned)((uint16_t)ms[0] | ((uint16_t)ms[1] << 8)), ms[2],
                    ms[3], ms[4], ms[5], ms[6]);
+        }
+        if (bus_read_reg(REG_OUF_END, f, sizeof(f)) == (int)sizeof(f)) {
+            printf("ouf end %u mid %u late %u age %u us; sts1 %02X sts2 %02X "
+                   "pos %u ptr %02X; slow %u us state %u sub %u\n",
+                   f[0], f[1], f[2], f[5], f[3], f[4], f[6], f[7],
+                   f[9], f[10], f[11]);
+            printf("max sub %u\n", f[12]);
         }
     }
 
@@ -398,12 +409,148 @@ static void stress_loop(uint32_t count, int mode, const char *label)
                g_fail_tail, g_fail_ffstart, g_fail_trunc[0], g_fail_trunc[1],
                (unsigned)g_fail_frames, (unsigned)g_fail_txn);
     }
+
+    /* Zero tolerance: an underrun, a retry or a malformed map is a failure,
+     * not noise.  A torn read is the host racing a republish, which the retry
+     * already re-read; it is not a corruption. */
+    (void)bus_read_reg(REG_OUF_END, ouf1, sizeof(ouf1));
+    {
+        bool clean = (g_retries == 0u) && (invalid == 0u) && (errors == 0u) &&
+                     (ouf1[0] == ouf0[0]) && (ouf1[1] == ouf0[1]) &&
+                     (ouf1[2] == ouf0[2]);
+
+        printf("RESULT: %s\n", clean ? "PASS" : "FAIL");
+        if (!clean) {
+            printf("RESULT DETAIL: retries %u invalid %u errors %u "
+                   "ouf end +%u mid +%u late +%u\n",
+                   (unsigned)g_retries, (unsigned)invalid, (unsigned)errors,
+                   (unsigned)(uint8_t)(ouf1[0] - ouf0[0]),
+                   (unsigned)(uint8_t)(ouf1[1] - ouf0[1]),
+                   (unsigned)(uint8_t)(ouf1[2] - ouf0[2]));
+        }
+    }
 }
 
 void stress_run(uint32_t count)
 {
     g_fail_valid = 0u;
     stress_loop(count, 0, "stress");
+}
+
+/* Narrow reproducer: read one register block over and over, so an underrun
+ * can be tied to the block length and to the state of the manager. */
+/* One live register, retried: a multi-byte read of the live block can itself
+ * be perturbed by the very underrun it is measuring. */
+static int read_u8(uint8_t reg, uint8_t *v)
+{
+    for (int i = 0; i < 3; i++) {
+        if (bus_read_reg(reg, v, 1u) == 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void print_diag(void)
+{
+    static const uint8_t dregs[23] = {
+        REG_DT_FULL, REG_OUF_END, REG_OUF_MID, REG_ISR_MAX,
+        REG_OUF_STS1, REG_OUF_STS2, REG_OUF_AGE, REG_ADDR_DT,
+        REG_OUF_REG_PTR, REG_SLOW_COUNT, REG_SLOW_US, REG_SLOW_STATE,
+        REG_SLOW_SUB, REG_MAX_SUB, REG_ACT_PREV, REG_ACT_DT,
+        REG_ACT_PREV2, REG_ACT_DT2, REG_ADDR_STALE, REG_OUF_ACT,
+        REG_OUF_ACT_DT, REG_OUF_ACT2, REG_OUF_ACT_DT2
+    };
+    uint8_t v[23];
+
+    for (int i = 0; i < 23; i++) {
+        if (!read_u8(dregs[i], &v[i])) {
+            v[i] = 0xFFu;
+        }
+    }
+    printf("diag dtfull %u end %u mid %u isr %u us; ouf age %u sts1 %02X "
+           "sts2 %02X addr_dt %u us ptr %02X\n",
+           v[0], v[1], v[2], v[3], v[6], v[4], v[5], v[7], v[8]);
+    printf("slow %u us state %u sub %u maxsub %u; addr %u; at ouf act %u "
+           "+%u us, before %u +%u us\n",
+           v[10], v[11], v[12], v[13], v[18], v[19], v[20], v[21], v[22]);
+}
+
+void diag_run(void)
+{
+    print_diag();
+}
+
+void repeat_run(uint8_t reg, uint32_t len, uint32_t n)
+{
+    uint8_t buf[256];
+    uint32_t good = 0u;
+    uint32_t wbad = 0u;
+    uint32_t rbad = 0u;
+    uint32_t max_us = 0u;
+    uint32_t diff = 0u;
+    uint8_t ref[256];
+    uint8_t diff_val = 0u;
+    uint8_t ref_val = 0u;
+    int have_ref = 0;
+    uint32_t t0err = bus_err_timeout;
+    uint32_t n0err = bus_err_nack;
+    uint32_t o0err = bus_err_other;
+
+    if ((len == 0u) || (len > sizeof(buf)) || (n == 0u)) {
+        printf("usage: repeat <reg> <len 1..256> <count>\n");
+        return;
+    }
+    for (uint32_t i = 0u; i < n; i++) {
+        absolute_time_t t0 = get_absolute_time();
+        int w = bus_write_reg(reg, NULL, 0u);   /* pointer write */
+        int r = (w == 0) ? bus_read_only(buf, (size_t)len) : -1;
+        uint32_t us = (uint32_t)absolute_time_diff_us(t0, get_absolute_time());
+
+        if (us > max_us) {
+            max_us = us;
+        }
+        if (w != 0) {
+            wbad++;
+        } else if (r != (int)len) {
+            rbad++;
+        } else {
+            good++;
+            /* The first reads can precede the first published snapshot (the
+             * map is zero until the manager runs), so the reference is taken
+             * only after a few clean reads. */
+            if (!have_ref) {
+                if (good >= 8u) {
+                    memcpy(ref, buf, (size_t)len);
+                    have_ref = 1;
+                }
+            } else if (memcmp(ref, buf, (size_t)len) != 0) {
+                if (diff == 0u) {
+                    for (uint32_t k = 0u; k < len; k++) {
+                        if (ref[k] != buf[k]) {
+                            ref_val = ref[k];
+                            diff_val = buf[k];
+                            break;
+                        }
+                    }
+                }
+                diff++;
+            }
+        }
+        if ((i % 256u) == 0u) {
+            service();
+        }
+    }
+    printf("repeat 0x%02X x %u x %u: %u good, %u wbad, %u rbad, %u diff, "
+           "max %u us; first %02X last %02X\n",
+           reg, (unsigned)len, (unsigned)n, (unsigned)good, (unsigned)wbad,
+           (unsigned)rbad, (unsigned)diff, (unsigned)max_us,
+           (unsigned)(have_ref ? ref[0] : 0), (unsigned)buf[0]);
+    printf("bus err +%u timeout, +%u nack, +%u other\n",
+           (unsigned)(bus_err_timeout - t0err),
+           (unsigned)(bus_err_nack - n0err),
+           (unsigned)(bus_err_other - o0err));
+    print_diag();
 }
 
 /* Every read is preceded by a deliberate 1-Wire edge burst, so the crosstalk
@@ -716,6 +863,7 @@ void suite_stress(void)
     bus_set_speed(BUS_SPEED_400K);
     write_speed(1u);
 }
+
 
 
 

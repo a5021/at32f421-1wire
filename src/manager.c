@@ -31,6 +31,7 @@ static uint8_t  eeprom_data[8];
 static uint8_t  eeprom_status;
 
 static uint32_t manager_state;
+static uint8_t  manager_sub;        /* where inside the state the CPU is */
 static uint8_t  pause_requested;
 static uint8_t  paused;
 static uint32_t search_started;
@@ -86,6 +87,11 @@ void manager_command(uint8_t cmd)
 uint8_t manager_state_reg(void)
 {
     return (uint8_t)(manager_state | (paused ? 0x80u : 0u));
+}
+
+uint8_t manager_subphase(void)
+{
+    return manager_sub;
 }
 
 /* Test helper: force the manager state (tests only). */
@@ -168,6 +174,7 @@ static bool crc_skip(uint32_t i)
 {
     return (i == REG_FLAGS) || (i == REG_SEQ) ||
            ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
+           ((i >= REG_DT_FULL) && (i <= REG_OUF_ACT_DT2)) ||
            ((i >= REG_CMD) && (i <= REG_DIAG_REASON)) ||
            ((i >= REG_MAX_STEP) && (i <= REG_EEP_POLL));
 }
@@ -275,6 +282,8 @@ static void publish_step(void){
     uint32_t t0 = NOW_CYCLES();
     uint8_t ph_in = pub_phase;
 
+    manager_sub = (uint8_t)(9u + ph_in);
+
     switch (pub_phase) {
     case 0u:
         map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
@@ -375,6 +384,7 @@ uint32_t manager_eep_poll_max(void)
 
 static void manager_search(void)
 {
+    manager_sub = (search_started == 0u) ? 1u : 2u;
     ow_status_t st;
 
     if (search_started == 0u) {
@@ -457,6 +467,7 @@ void manager_poll(void)
         break;
 
     case MGR_CONVERT:
+        manager_sub = (convert_started == 0u) ? 3u : 4u;
         if (convert_started == 0u) {
             if (ow_hal_busy()) {
                 return;
@@ -484,6 +495,7 @@ void manager_poll(void)
         break;
 
     case MGR_READ:
+        manager_sub = (read_started == 0u) ? 5u : 6u;
         /* device_count counts every device the search found, while roms[]
          * stores at most DEV_MAX of them: walk only the stored range. */
         while ((read_dev < rom_count()) && (roms[read_dev][0] != 0x28u)) {
@@ -528,6 +540,7 @@ void manager_poll(void)
         uint32_t i;
         uint32_t found = 0;
 
+        manager_sub = (eeprom_started == 0u) ? 7u : 8u;
         if (eeprom_started == 0u) {
             uint32_t t0 = NOW_CYCLES();
             uint32_t d;
@@ -585,6 +598,7 @@ void manager_poll(void)
         break;
 
     case MGR_WAIT:
+        manager_sub = 12u;
         if (!ow_delay_poll()) {
             return;
         }

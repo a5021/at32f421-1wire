@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Changed
+- **Bridge:** the I2C2 slave is served from its event and error interrupts
+  (highest priority, no other interrupts in the system); the 1-Wire engine
+  stays fully polled. `I2C_USE_IRQ` selects the interrupt path, `0` keeps the
+  old polled path for comparison and for 100 kHz.
+- **Bridge:** the byte service (`i2c_poll`, `reg_byte`, `i2c_send_byte` and the
+  ISR wrapper) is copied to SRAM at boot (`.ramfunc`): flash wait states alone
+  cost more than the master's 1.44 us low period at 400 kHz. `app/main.c` is
+  compiled without LTO so the section survives.
+- **Bridge:** the first byte of a read is computed when the register pointer
+  arrives and written immediately after `ADDR` is retired. Together with the
+  interrupt service this removed the MSB loss that made every short read start
+  with `0xDA` instead of `0x5A`.
+- **Bridge:** a speed change is applied from the main loop when the bus is
+  idle; re-initialising the peripheral inside the STOP handler could race the
+  master's next address.
+- **Tester:** `repeat <reg> <len> <n>` reads one block in a tight loop and
+  reports value differences (reference taken after a warm-up), NACKs and the
+  underrun counters; `diag` reads the forensics one register per transaction so
+  the measurement cannot corrupt itself.
+
+### Fixed
+- **Tester:** T51 no longer masks the MSB of the first byte. A masked compare
+  hid exactly the defect this work was about.
+
+### Notes
+- Measured with the interrupt path: 300 kHz, 500 000 reads (1-, 2- and 8-byte
+  blocks), 0 value differences, 0 underruns, 4 address NACKs; 400 kHz,
+  400 000 reads, 0 underruns in `stress`/`soak`, but a residual first-byte
+  error of about 1.5e-4 remains because the service path (~1.2 us) is close to
+  the 1.44 us low period. The map CRC covers it; 300 kHz is the speed that
+  measured clean.
+
 ### Fixed
 - **Bridge:** an expanded command packet terminates its slot buffer. The DMA
   walks slots `1..N`, so slot `N` is read even though only `N-1` pulses were

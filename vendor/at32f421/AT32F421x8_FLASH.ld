@@ -78,6 +78,21 @@ SECTIONS
     __exidx_end = .;
   } >FLASH
 
+  /* Time-critical code copied to SRAM at boot: the I2C byte service must not
+   * pay flash wait states, it has ~1.3 us to answer an address at 400 kHz. */
+  .ramfunc :
+  {
+    . = ALIGN(4);
+    _sramfunc = .;
+    *(.ramfunc)
+    *(.ramfunc*)
+    *(.text.ramfunc)
+    *(.text.ramfunc*)
+    . = ALIGN(4);
+    _eramfunc = .;
+  } >RAM AT> FLASH
+  _siramfunc = LOADADDR(.ramfunc);
+
   .preinit_array     :
   {
     PROVIDE_HIDDEN (__preinit_array_start = .);
@@ -151,3 +166,4 @@ SECTIONS
 
   .ARM.attributes 0 : { *(.ARM.attributes) }
 }
+

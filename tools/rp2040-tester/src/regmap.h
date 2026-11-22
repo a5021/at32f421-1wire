@@ -37,6 +37,30 @@
 #define REG_DIAG_BUSY           0x6Du
 #define REG_DIAG_ACK            0x6Eu
 #define REG_DIAG_REASON         0x6Fu
+/* Underrun forensics (temporary). */
+#define REG_OUF_END             0x4Au
+#define REG_OUF_MID             0x4Bu
+#define REG_ISR_MAX             0x4Cu   /* worst I2C service duration, us */
+#define REG_OUF_STS1            0x4Du
+#define REG_OUF_STS2            0x4Eu
+#define REG_OUF_AGE             0x4Fu
+#define REG_ADDR_DT             0x50u   /* ADDR release to first DT write, us */
+#define REG_OUF_REG_PTR         0x51u
+#define REG_SLOW_COUNT          0x52u
+#define REG_SLOW_US             0x53u
+#define REG_SLOW_STATE          0x54u
+#define REG_SLOW_SUB            0x55u
+#define REG_MAX_SUB             0x56u
+#define REG_ACT_PREV            0x57u
+#define REG_ACT_DT              0x58u
+#define REG_ACT_PREV2           0x59u
+#define REG_ACT_DT2             0x5Au
+#define REG_ADDR_STALE          0x5Bu
+#define REG_OUF_ACT             0x5Cu
+#define REG_OUF_ACT_DT          0x5Du
+#define REG_OUF_ACT2            0x5Eu
+#define REG_OUF_ACT_DT2         0x5Fu
+#define REG_DT_FULL             0x49u
 #define REG_MAX_STEP            0x79u
 #define REG_MAX_STEP_H          0x7Au
 #define REG_MAX_STATE           0x7Bu
@@ -98,6 +122,7 @@
 #define INVALID_TEMP            0x8000
 
 #endif /* TESTER_REGMAP_H */
+
 
 
 
