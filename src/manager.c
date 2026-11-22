@@ -160,6 +160,7 @@ static void crc_table_init(void)
 
 static uint8_t  shadow[256] __attribute__((aligned(4)));
 static uint8_t  pub_phase;
+static uint8_t  pub_fill_step;
 static uint32_t pub_pos;
 static uint16_t pub_crc;
 static uint16_t cycle_next;
@@ -222,8 +223,10 @@ static void crc_skip_table_init(void)
     }
 }
 
-/* Build the next snapshot into the shadow buffer. */
-static void publish_fill(uint8_t *dst)
+/* The fill is split into four steps as well: the 16-slot temperature and ROM
+ * loops together measured ~6 us, which is longer than the polled slave can be
+ * away from the bus at 400 kHz. */
+static void fill_header(uint8_t *dst)
 {
     uint8_t flags = FLAG_SNAPSHOT | FLAG_SEARCH_DONE;
     if (search_error != 0u) {
@@ -246,7 +249,10 @@ static void publish_fill(uint8_t *dst)
     dst[REG_CYCLE_L] = (uint8_t)(cycle_next & 0xFFu);
     dst[REG_CYCLE_H] = (uint8_t)(cycle_next >> 8);
     dst[REG_SPEED] = (uint8_t)g_i2c_speed;
+}
 
+static void fill_temps(uint8_t *dst)
+{
     for (uint32_t i = 0u; (i < ds18b20_count) && (i < DEV_MAX); i++) {
         dst[REG_TEMP + 2u * i] = (uint8_t)((uint16_t)temp_raw[i] & 0xFFu);
         dst[REG_TEMP + 2u * i + 1u] = (uint8_t)((uint16_t)temp_raw[i] >> 8);
@@ -259,7 +265,10 @@ static void publish_fill(uint8_t *dst)
         dst[REG_TEMP + 2u * i + 1u] = 0x80u;      /* 0x8000 = invalid */
         dst[REG_TEMP_STATUS + i] = 0xFFu;
     }
+}
 
+static void fill_eeprom(uint8_t *dst)
+{
     ow_copy8((void *)&dst[REG_EEPROM], eeprom_data);
     dst[REG_EEPROM_STATUS] = eeprom_status;
 
@@ -270,14 +279,21 @@ static void publish_fill(uint8_t *dst)
     }
 
     ow_copy9((uint8_t *)&dst[REG_SCRATCH], sp_sel);
+}
 
-    if (roms_dirty != 0u) {
-        for (uint32_t i = 0u; (i < device_count) && (i < DEV_MAX); i++) {
+static void fill_roms(uint8_t *dst, uint32_t first, uint32_t count)
+{
+    if (roms_dirty == 0u) {
+        return;
+    }
+    for (uint32_t i = first; i < (first + count); i++) {
+        if ((i < device_count) && (i < DEV_MAX)) {
             ow_copy8((void *)&dst[REG_ROMS + 8u * i], roms[i]);
-        }
-        for (uint32_t i = device_count; i < DEV_MAX; i++) {
+        } else {
             ow_fill8_ff((void *)&dst[REG_ROMS + 8u * i]);
         }
+    }
+    if ((first + count) >= DEV_MAX) {
         roms_dirty = 0u;
     }
 }
@@ -294,13 +310,35 @@ static void publish_step(void){
 
     switch (pub_phase) {
     case 0u:
-        map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
-        pub_pos += PUB_COPY;
-        if (pub_pos >= 256u) {
-            publish_fill(shadow);
+        if (pub_pos < 256u) {
+            map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
+            pub_pos += PUB_COPY;
+            break;
+        }
+        switch (pub_fill_step) {
+        case 0u:
+            fill_header(shadow);
+            pub_fill_step = 1u;
+            break;
+        case 1u:
+            fill_temps(shadow);
+            pub_fill_step = 2u;
+            break;
+        case 2u:
+            fill_eeprom(shadow);
+            pub_fill_step = 3u;
+            break;
+        case 3u:
+            fill_roms(shadow, 0u, 8u);
+            pub_fill_step = 4u;
+            break;
+        default:
+            fill_roms(shadow, 8u, 8u);
+            pub_fill_step = 0u;
             pub_crc = 0xFFFFu;
             pub_pos = 0u;
             pub_phase = 1u;
+            break;
         }
         break;
 
@@ -622,6 +660,8 @@ void manager_poll(void)
         break;
     }
 }
+
+
 
 
 
