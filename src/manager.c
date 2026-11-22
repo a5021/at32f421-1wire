@@ -9,6 +9,7 @@
 #endif
 
 #include "manager.h"
+#include "ow_copy.h"
 #include "onewire.h"
 #include "ds18b20.h"
 #include "ds2431.h"
@@ -20,14 +21,14 @@ static ds2431_t    eeprom;
 
 /* device_count counts every device the search finds; roms[] stores at most
  * DEV_MAX of them.  REG_DEVICES still reports the total. */
-static uint8_t  roms[DEV_MAX][8];
+static uint8_t  roms[DEV_MAX][8] __attribute__((aligned(4)));
 static uint32_t device_count;
 static uint32_t ds18b20_count;
 
 static int16_t  temp_raw[DEV_MAX];
 static uint8_t  temp_status[DEV_MAX];
-static uint8_t  sp_sel[9];
-static uint8_t  eeprom_data[8];
+static uint8_t  sp_sel[9] __attribute__((aligned(4)));
+static uint8_t  eeprom_data[8] __attribute__((aligned(4)));
 static uint8_t  eeprom_status;
 
 static uint32_t manager_state;
@@ -259,7 +260,7 @@ static void publish_fill(uint8_t *dst)
         dst[REG_TEMP_STATUS + i] = 0xFFu;
     }
 
-    memcpy((void *)&dst[REG_EEPROM], eeprom_data, 8u);
+    ow_copy8((void *)&dst[REG_EEPROM], eeprom_data);
     dst[REG_EEPROM_STATUS] = eeprom_status;
 
     /* A selection outside the DS18B20 table must not expose a stale
@@ -268,14 +269,14 @@ static void publish_fill(uint8_t *dst)
         memset(sp_sel, 0xFF, sizeof(sp_sel));
     }
 
-    memcpy((void *)&dst[REG_SCRATCH], sp_sel, 9u);
+    ow_copy9((uint8_t *)&dst[REG_SCRATCH], sp_sel);
 
     if (roms_dirty != 0u) {
         for (uint32_t i = 0u; (i < device_count) && (i < DEV_MAX); i++) {
-            memcpy((void *)&dst[REG_ROMS + 8u * i], roms[i], 8u);
+            ow_copy8((void *)&dst[REG_ROMS + 8u * i], roms[i]);
         }
         for (uint32_t i = device_count; i < DEV_MAX; i++) {
-            memset((void *)&dst[REG_ROMS + 8u * i], 0xFF, 8u);
+            ow_fill8_ff((void *)&dst[REG_ROMS + 8u * i]);
         }
         roms_dirty = 0u;
     }
@@ -411,7 +412,7 @@ static void manager_search(void)
     }
     if (st == OW_OK) {
         if (device_count < DEV_MAX) {
-            memcpy(roms[device_count], search.rom, 8u);
+            ow_copy8(roms[device_count], search.rom);
             if (search.rom[0] == 0x28u) {
                 ds18b20_count++;
             }
@@ -535,7 +536,7 @@ void manager_poll(void)
                 last_error = (uint32_t)st;
             }
             if (read_sensor == (uint32_t)(g_regs[REG_SELECTED] & 0x0Fu)) {
-                memcpy(sp_sel, sensor.sp, 9u);
+                ow_copy9(sp_sel, sensor.sp);
             }
             read_dev++;
             read_sensor++;
@@ -618,6 +619,8 @@ void manager_poll(void)
         break;
     }
 }
+
+
 
 
 
