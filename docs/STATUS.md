@@ -18,6 +18,12 @@ Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 | 300 kHz, 1-byte, 20 000 | 0 diff |
 | host tests | 332 checks, 0 failures |
 
+## Nuance
+
+A single `reg` read taken exactly when the manager runs can still lose the MSB
+(seen once: 0xDA); the 50 000-read loop is clean because the pointer write and
+read follow each other.  This is the same 1.44 us window, not a new defect.
+
 ## Next
 
 1. Re-run `stress 20000` and `run full` on this baseline with the new tester;
@@ -42,3 +48,4 @@ Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
   publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
 - Manager steps inside the I2C burst: first-byte errors rose to 2%.
+
