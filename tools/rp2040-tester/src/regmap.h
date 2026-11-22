@@ -56,10 +56,10 @@
 #define REG_ACT_PREV2           0x59u
 #define REG_ACT_DT2             0x5Au
 #define REG_ADDR_STALE          0x5Bu
-#define REG_OUF_ACT             0x5Cu
-#define REG_OUF_ACT_DT          0x5Du
-#define REG_OUF_ACT2            0x5Eu
-#define REG_OUF_ACT_DT2         0x5Fu
+#define REG_POLL_GAP_L         0x5Cu   /* worst gap between i2c_poll calls, us (LE) */
+#define REG_POLL_GAP_H         0x5Du
+#define REG_POLL_GAP_STATE     0x5Eu   /* manager state during that gap */
+#define REG_POLL_GAP_SUB       0x5Fu   /* manager subphase during that gap */
 #define REG_DT_FULL             0x49u
 #define REG_MAX_STEP            0x79u
 #define REG_MAX_STEP_H          0x7Au
@@ -122,6 +122,7 @@
 #define INVALID_TEMP            0x8000
 
 #endif /* TESTER_REGMAP_H */
+
 
 
 

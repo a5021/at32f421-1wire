@@ -458,8 +458,8 @@ static void print_diag(void)
         REG_OUF_STS1, REG_OUF_STS2, REG_OUF_AGE, REG_ADDR_DT,
         REG_OUF_REG_PTR, REG_SLOW_COUNT, REG_SLOW_US, REG_SLOW_STATE,
         REG_SLOW_SUB, REG_MAX_SUB, REG_ACT_PREV, REG_ACT_DT,
-        REG_ACT_PREV2, REG_ACT_DT2, REG_ADDR_STALE, REG_OUF_ACT,
-        REG_OUF_ACT_DT, REG_OUF_ACT2, REG_OUF_ACT_DT2
+        REG_ACT_PREV2, REG_ACT_DT2, REG_ADDR_STALE, REG_POLL_GAP_L,
+        REG_POLL_GAP_H, REG_POLL_GAP_STATE, REG_POLL_GAP_SUB
     };
     uint8_t v[23];
 
@@ -471,9 +471,10 @@ static void print_diag(void)
     printf("diag dtfull %u end %u mid %u isr %u us; ouf age %u sts1 %02X "
            "sts2 %02X addr_dt %u us ptr %02X\n",
            v[0], v[1], v[2], v[3], v[6], v[4], v[5], v[7], v[8]);
-    printf("slow %u us state %u sub %u maxsub %u; addr %u; at ouf act %u "
-           "+%u us, before %u +%u us\n",
-           v[10], v[11], v[12], v[13], v[18], v[19], v[20], v[21], v[22]);
+    printf("slow %u us state %u sub %u maxsub %u; addr stale %u; "
+           "poll gap %u us state %u sub %u\n",
+           v[10], v[11], v[12], v[13], v[18],
+           (unsigned)((uint16_t)v[19] | ((uint16_t)v[20] << 8)), v[21], v[22]);
 }
 
 void diag_run(void)
@@ -863,6 +864,7 @@ void suite_stress(void)
     bus_set_speed(BUS_SPEED_400K);
     write_speed(1u);
 }
+
 
 
 

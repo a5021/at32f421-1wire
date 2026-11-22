@@ -3,10 +3,15 @@
 ## Unreleased
 
 ### Changed
-- **Bridge:** the I2C2 slave is served from its event and error interrupts
-  (highest priority, no other interrupts in the system); the 1-Wire engine
-  stays fully polled. `I2C_USE_IRQ` selects the interrupt path, `0` keeps the
-  old polled path for comparison and for 100 kHz.
+- **Bridge:** the polled path is the default again (`I2C_USE_IRQ=0`). The main
+  loop serves the bus in a burst of 64 polls before any housekeeping, and the
+  address handler clears `ADDR` and writes the precomputed first byte before
+  the ACKFAIL bookkeeping. Measured: with the manager paused, 400 kHz shows
+  0-6 value differences in 20 000 reads; with the manager running, 1 per
+  200 000 single-byte reads, but a 10 us manager step still causes 60 underruns
+  in `stress 20000`.
+- **Bridge:** the I2C byte service can run from interrupt or poll
+  (`I2C_USE_IRQ`), the state machine is shared.
 - **Bridge:** the byte service (`i2c_poll`, `reg_byte`, `i2c_send_byte` and the
   ISR wrapper) is copied to SRAM at boot (`.ramfunc`): flash wait states alone
   cost more than the master's 1.44 us low period at 400 kHz. The functions are

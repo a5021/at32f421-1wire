@@ -14,7 +14,7 @@
  * two modes can be compared without rewriting the logic.  The 1-Wire engine
  * stays polled either way. */
 #ifndef I2C_USE_IRQ
-#define I2C_USE_IRQ 1
+#define I2C_USE_IRQ 0
 #endif
 
 #define I2C_ADDR7               0x42u
@@ -70,6 +70,10 @@ static uint32_t first_byte;
 static uint32_t service_t0;         /* DWT cycle at the last service entry */
 static uint32_t isr_max_cycles;
 static uint32_t addr_dt_max_cycles;
+static uint32_t poll_last_cycles;
+static uint32_t poll_gap_max_cycles;
+static uint8_t  poll_gap_state;
+static uint8_t  poll_gap_sub;
 static uint8_t  first_byte_pre;     /* value for the next read's first byte */
 static volatile uint8_t first_byte_ok;
 static int      pending_speed = -1;
@@ -306,14 +310,20 @@ static uint8_t reg_byte(uint32_t addr)
         return diag_addr_stale;
     case REG_DT_FULL:
         return diag_dt_full;
-    case REG_OUF_ACT:
-        return diag_ouf_act;
-    case REG_OUF_ACT_DT:
-        return diag_ouf_act_dt;
-    case REG_OUF_ACT2:
-        return diag_ouf_act2;
-    case REG_OUF_ACT_DT2:
-        return diag_ouf_act_dt2;
+    case REG_POLL_GAP_L: {
+        uint32_t us = poll_gap_max_cycles / cycles_per_us;
+
+        return (uint8_t)(us & 0xFFu);
+    }
+    case REG_POLL_GAP_H: {
+        uint32_t us = poll_gap_max_cycles / cycles_per_us;
+
+        return (uint8_t)((us >> 8) & 0xFFu);
+    }
+    case REG_POLL_GAP_STATE:
+        return poll_gap_state;
+    case REG_POLL_GAP_SUB:
+        return poll_gap_sub;
     case REG_OUF_POS:
         return diag_ouf_pos;
     case REG_OUF_PTR:
@@ -374,6 +384,9 @@ static void health_clear(void)
     diag_recoveries = 0u;
     isr_max_cycles = 0u;
     addr_dt_max_cycles = 0u;
+    poll_gap_max_cycles = 0u;
+    poll_gap_state = 0u;
+    poll_gap_sub = 0u;
     act_prev = 0u;
     act_prev2 = 0u;
     act_dt = 0u;
@@ -757,10 +770,10 @@ static void i2c_poll(void)
 
     if ((sts1 & STS1_ADDR7F) != 0u) {
         uint32_t dt0;
+        uint32_t dirf;
 
         /* Retire a pending STOP, but do not call the full retire path when
-         * there is none: with interrupts the STOP is normally already
-         * serviced, and that call alone costs most of the 1.3 us window. */
+         * there is none: it would cost most of the first-byte window. */
         if ((sts1 & STS1_STOPF) != 0u) {
             i2c_stop_done();
         } else if (tx_mode != 0u) {
@@ -768,17 +781,13 @@ static void i2c_poll(void)
                 diag_addr_stale++;
             }
         }
-        I2C2->sts1 = (uint32_t)~(STS1_ACKFAIL & 0x0000DF00u);
 
-        /* Retire ADDR (read STS1 then STS2) and load the first byte as the
-         * very next action: the master's first clock follows the release by
-         * less than two microseconds.  The value was computed when the
-         * register pointer arrived, so no lookup happens here. */
-        (void)I2C2->sts1;
+        /* Retire ADDR and load the first byte as the very next action.  The
+         * STS1 read at the top of this function is the first half of the
+         * clear sequence, so no second read is needed. */
         sts2 = I2C2->sts2;
-        if ((sts2 & STS2_DIRF) != 0u) {
-            tx_mode = 1;
-            rx_mode = 0;
+        dirf = sts2 & STS2_DIRF;
+        if (dirf != 0u) {
             if ((first_byte_ok != 0u) && (fault_next == 0u)) {
                 I2C2->dt = first_byte_pre;
                 last_dt_cycles = DWT->CYCCNT;
@@ -793,6 +802,15 @@ static void i2c_poll(void)
             if (dt0 > addr_dt_max_cycles) {
                 addr_dt_max_cycles = dt0;
             }
+        }
+
+        /* Only after the data write: a stale NACK from the previous frame is
+         * cleared here, and it must not delay the byte. */
+        I2C2->sts1 = (uint32_t)~(STS1_ACKFAIL & 0x0000DF00u);
+
+        if (dirf != 0u) {
+            tx_mode = 1;
+            rx_mode = 0;
         } else {
             rx_mode = 1;
             tx_mode = 0;
@@ -806,11 +824,6 @@ static void i2c_poll(void)
             fault_drop_frame = 0u;
         }
 
-        if ((sts2 & STS2_DIRF) == 0u) {
-            rx_mode = 1;
-            tx_mode = 0;
-            first_byte = 1;
-        }
         /* Data-phase events (TDBE/RDBF) are only interesting while a frame is
          * being served; arming them here keeps an idle empty transmitter from
          * raising an endless interrupt. */
@@ -983,12 +996,29 @@ int main(void)
 
     manager_init();
 
+    poll_last_cycles = DWT->CYCCNT;
+
     for (;;) {
+#if !I2C_USE_IRQ
+        {
+            uint32_t now = DWT->CYCCNT;
+            uint32_t gap = now - poll_last_cycles;
+
+            poll_last_cycles = now;
+            if (gap > poll_gap_max_cycles) {
+                poll_gap_max_cycles = gap;
+                poll_gap_state = (uint8_t)(manager_state_reg() & 0x0Fu);
+                poll_gap_sub = manager_subphase();
+            }
+        }
+        /* Serve the bus in a tight burst: the only way a polled slave can meet
+         * a 1.44 us low period is to keep everything else out of the loop. */
+        for (uint32_t n = 0u; n < 64u; n++) {
+            i2c_poll();
+        }
+#endif
         timebase_poll();
         bus_health_poll();
-#if !I2C_USE_IRQ
-        i2c_poll();
-#endif
         if ((pending_speed >= 0) && !i2c_active()) {
             i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
             pending_speed = -1;

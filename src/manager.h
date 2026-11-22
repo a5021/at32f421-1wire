@@ -57,10 +57,10 @@ extern "C" {
 #define REG_ACT_PREV2           0x59u
 #define REG_ACT_DT2             0x5Au
 #define REG_ADDR_STALE          0x5Bu   /* address seen mid-frame, no STOP */
-#define REG_OUF_ACT             0x5Cu   /* action right before the underrun */
-#define REG_OUF_ACT_DT          0x5Du
-#define REG_OUF_ACT2            0x5Eu
-#define REG_OUF_ACT_DT2         0x5Fu
+#define REG_POLL_GAP_L         0x5Cu   /* worst gap between i2c_poll calls, us (LE) */
+#define REG_POLL_GAP_H         0x5Du
+#define REG_POLL_GAP_STATE     0x5Eu   /* manager state during that gap */
+#define REG_POLL_GAP_SUB       0x5Fu   /* manager subphase during that gap */
 #define REG_DT_FULL             0x49u   /* address matched with DT still full */
 #define REG_DIAG_CRC_FFFF       0x6Cu   /* publishes with a 0xFFFF CRC */
 #define REG_DIAG_BUSY           0x6Du   /* SDA-stuck recoveries */
@@ -148,6 +148,7 @@ void manager_set_state_for_test(uint32_t state);
 #endif
 
 #endif /* MANAGER_H */
+
 
 
 

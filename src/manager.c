@@ -174,7 +174,7 @@ static bool crc_skip(uint32_t i)
 {
     return (i == REG_FLAGS) || (i == REG_SEQ) ||
            ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
-           ((i >= REG_DT_FULL) && (i <= REG_OUF_ACT_DT2)) ||
+           ((i >= REG_DT_FULL) && (i <= REG_POLL_GAP_SUB)) ||
            ((i >= REG_CMD) && (i <= REG_DIAG_REASON)) ||
            ((i >= REG_MAX_STEP) && (i <= REG_EEP_POLL));
 }
@@ -611,6 +611,7 @@ void manager_poll(void)
         break;
     }
 }
+
 
 
 
