@@ -1,18 +1,88 @@
-dump 0 256
-00: 5A 03 1D 09 07 00 6E 00 FA 0E 00 00 00 00 00 01  Z.....n.........
-10: C8 01 CB 01 CA 01 CB 01 C1 01 CC 01 CB 01 00 80  ................
-20: 00 80 00 80 00 80 00 80 00 80 00 80 00 80 00 80  ................
-30: 00 00 00 00 00 00 00 FF FF FF FF FF FF FF FF FF  ................
-40: F7 C6 D7 08 1A 1B 1C 1D 00 00 00 00 00 00 00 00  ................
-50: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
-60: 03 00 00 28 9E 01 07 05 0A 01 04 09 00 01 05 2F  ...(.........../
-70: C8 01 19 0F 7F FF 08 10 65 0A 00 04 01 0B 01 05  ........e.......
-80: 28 20 78 92 07 00 00 67 28 78 B8 AC 0B 00 00 2C  ( x....g(x.....,
-90: 28 64 69 AB 0B 00 00 1F 28 FC AE AA 0B 00 00 F3  (di.....(.......
-A0: 28 C6 BB 4E 04 00 00 67 28 7E 63 AD 0B 00 00 3F  (..N...g(~c....?
-B0: 28 F1 39 AD 0B 00 00 D9 3A 9F 47 03 00 00 00 3A  (.9.....:.G....:
-C0: 2D F8 47 60 26 00 00 69 FF FF FF FF FF FF FF FF  -.G`&..i........
-D0: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................
-E0: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................
-F0: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................
+# stress 20000 (400 kHz)
+stress 20000
+stress 20000: 20000 good, 0 torn, 0 invalid, 0 errors, max 6342 us
+errors: 0 timeout, 0 nack, 1 other; transport 1, validate 3, retries 4, last: map crc B7DA != FFFF, val: map crc B7DA != FFFF [FF FF FF FF FF FF FF FF]
+retry phase: busy 3, idle 1, unknown 0
+retry manager: search 0 convert 1 read 2 eeprom 0 publish 0 wait 1
+retry transport steps: seq-in 3, map 1, seq-out 0
+retry bit positions: b0 1 b1 1 b2 1 b3 2 b4 1 b5 1 b6 1 b7 1
+retry offsets: 1 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 unknown 1
+#1 validate try1 cycle 152 flags 0x1D off 25 6 ms
+#2 transport try1 cycle 170 flags 0x1D off 255 0 ms
+#3 validate try1 cycle 186 flags 0x1D off 64 6 ms
+#4 validate try1 cycle 239 flags 0x19 off 6 6 ms
+max manager step: 10 us, state 4; ouf 1@17; eep start 1 us, poll 5 us
+ouf end 0 mid 0 late 0 age 0 us; sts1 00 sts2 00 pos 0 ptr 00; slow 0 us state 0 sub 0
+max sub 0
+last fail: seq DA/DA magic 5A ver 03 flags 1D crc FFFF diag ffff 0 busy 2 ack 254 reason 49 health 05 ff-tail 246 ff-start 10 ouf 1@17 frames 128017 txn 128013
+RESULT: FAIL
+RESULT DETAIL: retries 4 invalid 0 errors 0 ouf end +0 mid +0 late +0
+> [K
+
+# run full (400 kHz)
+run full
+T01 probe 0x42             PASS - ack
+T02 nack unused            PASS - 0x50-0x52,0x7F nack
+T03 header                 PASS - magic 0x5A version 3 flags 0x1D
+T04 map 256                PASS - 9 devices, 7 ds18b20, cycle 279
+T05 pointer increment      PASS - 0x40, 0x80 match
+T06 pointer wrap           PASS - 0xFE..0x01 wraps
+T07 repeated start         PASS - Sr read ok
+T08 turnaround sweep       PASS - 0..50 us gap
+T09 400 kHz clock          PASS - 401 kHz, low 1440/2504 ns, 317 periods
+T10 stretch                PASS - max low 3 us
+T11 100/400 ratio          PASS - 3222 us vs 846 us, 3.8x
+T12 magic + version        PASS - 0x5A v1
+T13 device counts          PASS - 9 total, 7 x 0x28
+T14 rom crc8               PASS - 9 roms
+T15 invalid markers        PASS - unused slots 0x8000/0xFF/FF
+T16 read-only writes       PASS - writes ignored
+T17 invalid speed          PASS - 5 and 0xAA ignored (1)
+T18 unknown command        PASS - ignored
+T19 speed readback         PASS - 0 then 1
+T20 command while busy     PASS - deferred, map intact
+T21 no torn snapshots      PASS - 400 stable, 0 torn, 0 retried
+T22 cycle monotonic        PASS - 1 increments
+T23 busy transitions       PASS - 7 transitions
+T24 header while busy      PASS - ack during cycle
+T43 health frames          PASS - 34 frames for 32 transactions
+T44 health clear           PASS - frames 4, flags 0
+T45 health accounting      PASS - 500 reads, 0 missed, 0 truncated
+T46 health sda stuck       PASS - detected, target responded after release
+T47 health no false alarm  PASS - 200 reads, no flags
+T25 temperature range      PASS - 7 sensors, 447..457 counts
+T26 temperature stability  PASS - 5 samples within 2 C
+T27 scratchpad crc         PASS - C4 01 19 ...
+T28 selected scratchpad    PASS - 4 sensors
+T29 invalid selection      PASS - 0xFF scratchpad
+T30 ds2431 stable          PASS - F7 C6 D7 ...
+T31 ds2431 reread          PASS - unchanged, status ok
+T32 rescan stable          PASS - 3 rescans identical
+T33 rescan while busy      PASS - deferred, 9 devices
+T34 ds2413 presence        PASS - enumerated, no pio driver
+T35 10k map reads          PASS - 10000 good, 0 torn, max 6336 us
+T36 60 s soak              PASS - 9264 good, 0 torn, 2 retries, max 6347 us
+retry phase: busy 2, idle 0, unknown 0
+retry manager: search 0 convert 0 read 2 eeprom 0 publish 0 wait 0
+retry transport steps: seq-in 2, map 0, seq-out 0
+retry bit positions: b0 0 b1 0 b2 0 b3 2 b4 0 b5 0 b6 0 b7 0
+retry offsets: 0 0 0 0 2 0 0 0 0 0 0 0 0 0 0 0 unknown 0
+#1 validate try1 cycle 71 flags 0x1D off 64 6 ms
+#2 validate try1 cycle 107 flags 0x1D off 64 6 ms
+T37 random reads           PASS - 4096 reads
+T38 random read-only writes PASS - snapshot intact
+T39 mixed fuzz             PASS - 1000 mixed ops
+T40 nack recovery          PASS - 100 nacks, map ok
+T41 nack storm             PASS - 1000 alternations
+T42 final validation       PASS - cycle advancing, map valid
+T48 inject address         PASS - 32 lost address phases
+T49 inject frames          PASS - 8 dropped, 8 phantom, no false loss
+T50 map crc                PASS - map crc 65AF != 8036
+T51 inject skip            PASS - first byte dropped, next read clean
+T52 inject clock           PASS - one extra clock, map intact
+T53 random fuzz            PASS - 400 ops, digest 858ABED3
+T54 fuzz replay            PASS - same seed, same digest E43EBCE9
+T55 corrupt writes         PASS - unknown cmd and speed ignored, selection bounded
+SUMMARY: 55/55 passed, 0 failed
+RESULT: PASS
 > [K

@@ -14,8 +14,10 @@ Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 | setup | result |
 |-------|--------|
 | 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
+| 400 kHz, `stress 20000` | 20000 good, 0 torn, 0 invalid, 0 errors, 4 retries (1 OUF), FAIL by zero tolerance |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
+| `run full` (400 kHz) | 55/55 passed, 190 s |
 | host tests | 332 checks, 0 failures |
 
 ## Nuance
@@ -24,20 +26,27 @@ A single `reg` read taken exactly when the manager runs can still lose the MSB
 (seen once: 0xDA); the 50 000-read loop is clean because the pointer write and
 read follow each other.  This is the same 1.44 us window, not a new defect.
 
+`stress 20000` is clean on data (0 torn, 0 invalid, 0 errors) but fails the
+zero-tolerance verdict on 4 retries: three map reads landed on a publish
+(offsets 25/64/6, re-read clean), and one was a transmit underrun (`ouf 1@17`)
+that returned an all-0xFF tail once and re-read clean.  `run full` T36 soak
+shows the same publish-race signature: 2 retries, both at offset 64.
+
 ## Next
 
-1. Blocked: `stress 20000` and `run full` cannot produce numbers while the
-   tester CRC coverage differs from the firmware (see Rejected). Align
-   `tests.c` `map_crc16()` with the firmware `crc_skip()`, then re-run both.
-2. Only then decide whether anything from the post-e9ba176 work is worth
-   re-applying (candidates: the publish slicing, nothing else).
+1. `stress 20000` is FAIL by zero tolerance (4 retries, 1 OUF at 400 kHz).
+   Decide whether that budget is acceptable, or whether the publish race is
+   worth one more attempt; only then revisit the post-e9ba176 candidates
+   (publish slicing).
+2. Nothing else is pending: `run full` is 55/55 on this baseline.
 
 ## Commands
 
 ```
 make -j8 && make test
+tools/bench.ps1 -Profile stress -Flash
+tools/bench.ps1 -Profile full
 tools/bench.ps1 -Flash -Cmd "repeat 0x00 1 50000" -Speed 400
-tools/bench.ps1 -Cmd "stress 20000" -Speed 400
 ```
 
 Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
@@ -45,16 +54,11 @@ Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
 
 ## Rejected (do not repeat)
 
-- Tester `map_crc16()` skips `REG_DT_FULL`(0x49)..`REG_POLL_GAP_SUB`(0x5F) but
-  the e9ba176 firmware `crc_skip()` includes those bytes. They read as 0x00,
-  yet a skipped zero still advances the CRC, so every map read reports
-  `map crc XXXX != YYYY`. Measured 2026-11-22 at 400 kHz on e9ba176: `stress 10`
-  0 good / 10 invalid (0 timeout, 0 nack), `run quick` 38/47 with all nine
-  failures CRC or CRC-derived (`T04 T15 T21 T25 T51 T52 T53 T54 T55`), while
-  `repeat 0x00 1 10` was 10/10 clean and the dumped map's stored CRC 0x9E28
-  matched the firmware coverage exactly. `stress 20000` prints only at the end
-  and each failing iteration costs about 2 s, so it did not finish in 900 s.
-  Do not run stress/full on this pairing; fix the tester coverage first.
+- Tester `map_crc16()` skipping `REG_DT_FULL`(0x49)..`REG_POLL_GAP_SUB`(0x5F):
+  the skip came with the post-e9ba176 forensics registers, but the baseline
+  firmware includes those bytes, and a skipped zero still advances the CRC, so
+  every map read failed. Fixed 2026-11-22 in `tests.c`; keep tester and firmware
+  `crc_skip` sets identical.
 - I2C interrupts, SRAM service, first-byte precompute, 64-poll burst,
   publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
