@@ -26,8 +26,9 @@ read follow each other.  This is the same 1.44 us window, not a new defect.
 
 ## Next
 
-1. Re-run `stress 20000` and `run full` on this baseline with the new tester;
-   record the numbers here.
+1. Blocked: `stress 20000` and `run full` cannot produce numbers while the
+   tester CRC coverage differs from the firmware (see Rejected). Align
+   `tests.c` `map_crc16()` with the firmware `crc_skip()`, then re-run both.
 2. Only then decide whether anything from the post-e9ba176 work is worth
    re-applying (candidates: the publish slicing, nothing else).
 
@@ -44,6 +45,16 @@ Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
 
 ## Rejected (do not repeat)
 
+- Tester `map_crc16()` skips `REG_DT_FULL`(0x49)..`REG_POLL_GAP_SUB`(0x5F) but
+  the e9ba176 firmware `crc_skip()` includes those bytes. They read as 0x00,
+  yet a skipped zero still advances the CRC, so every map read reports
+  `map crc XXXX != YYYY`. Measured 2026-11-22 at 400 kHz on e9ba176: `stress 10`
+  0 good / 10 invalid (0 timeout, 0 nack), `run quick` 38/47 with all nine
+  failures CRC or CRC-derived (`T04 T15 T21 T25 T51 T52 T53 T54 T55`), while
+  `repeat 0x00 1 10` was 10/10 clean and the dumped map's stored CRC 0x9E28
+  matched the firmware coverage exactly. `stress 20000` prints only at the end
+  and each failing iteration costs about 2 s, so it did not finish in 900 s.
+  Do not run stress/full on this pairing; fix the tester coverage first.
 - I2C interrupts, SRAM service, first-byte precompute, 64-poll burst,
   publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
