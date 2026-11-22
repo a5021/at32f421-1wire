@@ -12,6 +12,7 @@ param(
     [switch]$Tester,
     [string]$Cmd  = "sweep 20000",
     [string]$Port = "COM10",
+    [int]$Speed = 400,
     [int]$WaitSec = 90
 )
 
@@ -58,6 +59,11 @@ while ((Get-Date) -lt $deadline) {
 $p.Write([char]3); Start-Sleep -Milliseconds 300
 $p.ReadExisting() | Out-Null
 
+if ($Speed -gt 0) {
+    $p.WriteLine("speed $Speed")
+    Start-Sleep -Milliseconds 900
+    $p.ReadExisting() | Out-Null
+}
 $p.WriteLine($Cmd)
 $end = (Get-Date).AddSeconds($WaitSec)
 $buf = New-Object System.Text.StringBuilder
@@ -82,3 +88,4 @@ $lines = ($buf.ToString() -split "`r?`n") |
 $lines | Where-Object {
     $_ -match "^(sweep|\s*\d+ kHz|stress \d+:|errors:|retry manager|max manager step|diag |slow |repeat |RESULT)"
 } | ForEach-Object { $_ }
+

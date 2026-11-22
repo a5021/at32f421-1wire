@@ -16,6 +16,7 @@ enum {
     DS_PH_WRITE_WAIT,
     DS_PH_DELAY_WAIT,
     DS_PH_READ_WAIT,
+    DS_PH_VERIFY,
     DS_PH_DONE
 };
 
@@ -228,16 +229,23 @@ ow_status_t ds18b20_read_poll(ds18b20_t *d)
         if (st == OW_BUSY) {
             return OW_BUSY;
         }
-        d->phase = DS_PH_DONE;
         if (st != OW_OK) {
+            d->phase = DS_PH_DONE;
             return st;
         }
+        /* The CRC and the raw conversion are a separate manager step: doing
+         * them here made one step ~6 us, longer than the polled I2C window. */
+        d->phase = DS_PH_VERIFY;
+        return OW_BUSY;
+    }
+
+    case DS_PH_VERIFY:
+        d->phase = DS_PH_DONE;
         if (!ds18b20_crc_ok(d)) {
             return OW_CRC_ERROR;
         }
         d->raw = (int16_t)(((uint16_t)d->sp[1] << 8) | d->sp[0]);
         return OW_OK;
-    }
 
     case DS_PH_DONE:
     default:
