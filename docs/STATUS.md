@@ -2,53 +2,43 @@
 
 Updated: 2026-11-22
 
-## Goal
+## Decision
 
-Polled I2C slave at 400 kHz with zero data errors; 1-Wire engine stays
-interrupt-free. Interrupt path exists as an option (`I2C_USE_IRQ`), polled is
-the default.
+Firmware is back at `e9ba176`. It measured, with the current value-checking
+tester, at 400 kHz: 50 000 single-byte reads, 0 diff, 0 nack, 0 OUF. The
+IRQ/RAM/precompute/burst work after it was a regression and has been dropped.
+Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 
-## Current numbers
+## Current numbers (e9ba176)
 
 | setup | result |
 |-------|--------|
-| 400 kHz, polled, `repeat 0x00 1` 50 000 | 0 diff, 0 nack |
-| 400 kHz, polled, `repeat 0x6A 2` 50 000 | 0 diff, 2 nack |
-| 400 kHz, polled, `stress 20000` | 0 invalid, 0 errors, 24 retries (0.12%) |
-| 300 kHz, polled, 500 000 reads | 0 diff, 0 OUF |
-| worst manager step | 6 us, `MGR_READ` |
+| 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
+| 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
+| 300 kHz, 1-byte, 20 000 | 0 diff |
+| host tests | 332 checks, 0 failures |
 
-## Blocker
+## Next
 
-24 retries per 20 000 reads at 400 kHz: first byte loses its MSB when a
-manager step (6 us) covers the 1.44 us low period. Every manager step must be
-<= 1 us.
-
-## Next experiment
-
-Slice `MGR_READ` (manager.c): final `ow_read_poll` completion, `ds18b20_crc_ok`
-and the `ow_copy9(sp_sel, ...)` bookkeeping as separate phases. Then measure
-`ow_hal_feed` (ow_hal.c), which programs TMR1 + DMA in one call.
-
-Acceptance: `REG_MAX_STEP` <= 1 us, `sweep` 0 diff, `stress 20000` 0 retries.
+1. Re-run `stress 20000` and `run full` on this baseline with the new tester;
+   record the numbers here.
+2. Only then decide whether anything from the post-e9ba176 work is worth
+   re-applying (candidates: the publish slicing, nothing else).
 
 ## Commands
 
 ```
-make -j8 && make test                    # firmware + 332 host checks
-make flash-stlink                        # or tools/bench.ps1 -Flash
-tools/bench.ps1 -Flash                   # flash + sweep + one-line summary
-tools/bench.ps1 -Cmd "stress 20000"      # flash skipped, custom scenario
+make -j8 && make test
+tools/bench.ps1 -Flash -Cmd "repeat 0x00 1 50000" -Speed 400
+tools/bench.ps1 -Cmd "stress 20000" -Speed 400
 ```
 
-Tester port COM10, 115200. It runs its own suite on boot: send Ctrl-C twice
-and wait for `ready:` before commands.
+Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
+`C:\Users\mr.smith\at32f421-1wire-baseline` (detached at e9ba176).
 
-## Rejected / known
+## Rejected (do not repeat)
 
-- `memcpy` in manager steps: replaced by `ow_copy8/ow_copy9` (LDRD/STRD).
-- Manager steps inside the I2C burst: raised first-byte errors to 2%.
+- I2C interrupts, SRAM service, first-byte precompute, 64-poll burst,
+  publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
-- Commit must not copy `REG_SEQ` (0x08): it broke the seqlock (fixed).
-- T50/T51 inject a fault and force the slow first-byte path; they are test
-  harness issues, not traffic.
+- Manager steps inside the I2C burst: first-byte errors rose to 2%.

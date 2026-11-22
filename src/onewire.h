@@ -45,7 +45,7 @@ ow_status_t ow_read_poll(uint8_t *dst);
 
 /* ROM search state.  Zero-initialise or call ow_search_begin() first. */
 typedef struct {
-    uint8_t rom[8] __attribute__((aligned(4)));
+    uint8_t rom[8];
     int8_t  last_discrepancy;
     bool    last_device;
     /* private */

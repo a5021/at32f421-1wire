@@ -38,30 +38,6 @@ extern "C" {
 #define REG_STALL_STATE         0x67u   /* manager state of that call */
 #define REG_STALL_P2            0x68u   /* publish phase 2 max */
 #define REG_STALL_AVG           0x69u   /* publish phase 0/1/2 averages */
-/* Underrun forensics: temporary, removed once the mechanism is closed. */
-#define REG_OUF_END             0x4Au   /* OUF together with ACKFAIL/STOPF */
-#define REG_OUF_MID             0x4Bu   /* OUF in the middle of a frame */
-#define REG_ISR_MAX             0x4Cu   /* worst I2C service duration, us */
-#define REG_OUF_STS1            0x4Du   /* STS1 high byte at that moment */
-#define REG_OUF_STS2            0x4Eu   /* STS2 at that moment */
-#define REG_OUF_AGE             0x4Fu   /* us since DT was last written */
-#define REG_ADDR_DT             0x50u   /* ADDR release to first DT write, us */
-#define REG_OUF_REG_PTR         0x51u   /* reg_ptr at that moment */
-#define REG_SLOW_COUNT          0x52u   /* manager steps over 20 us */
-#define REG_SLOW_US             0x53u
-#define REG_SLOW_STATE          0x54u
-#define REG_SLOW_SUB            0x55u
-#define REG_MAX_SUB             0x56u   /* subphase of the worst step */
-#define REG_ACT_PREV            0x57u   /* last i2c_poll action */
-#define REG_ACT_DT              0x58u   /* us since the action before it */
-#define REG_ACT_PREV2           0x59u
-#define REG_ACT_DT2             0x5Au
-#define REG_ADDR_STALE          0x5Bu   /* address seen mid-frame, no STOP */
-#define REG_POLL_GAP_L         0x5Cu   /* worst gap between i2c_poll calls, us (LE) */
-#define REG_POLL_GAP_H         0x5Du
-#define REG_POLL_GAP_STATE     0x5Eu   /* manager state during that gap */
-#define REG_POLL_GAP_SUB       0x5Fu   /* manager subphase during that gap */
-#define REG_DT_FULL             0x49u   /* address matched with DT still full */
 #define REG_DIAG_CRC_FFFF       0x6Cu   /* publishes with a 0xFFFF CRC */
 #define REG_DIAG_BUSY           0x6Du   /* SDA-stuck recoveries */
 #define REG_DIAG_ACK            0x6Eu
@@ -129,7 +105,7 @@ void manager_command(uint8_t cmd);
 
 /* Manager state, injected into REG_MGR at read time (diagnostics). */
 uint8_t manager_state_reg(void);
-uint8_t manager_subphase(void);
+
 /* Publish-window diagnostics. */
 bool manager_publish_busy(void);
 uint8_t manager_crc_ffff_count(void);
@@ -148,8 +124,6 @@ void manager_set_state_for_test(uint32_t state);
 #endif
 
 #endif /* MANAGER_H */
-
-
 
 
 

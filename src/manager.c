@@ -9,7 +9,6 @@
 #endif
 
 #include "manager.h"
-#include "ow_copy.h"
 #include "onewire.h"
 #include "ds18b20.h"
 #include "ds2431.h"
@@ -21,18 +20,17 @@ static ds2431_t    eeprom;
 
 /* device_count counts every device the search finds; roms[] stores at most
  * DEV_MAX of them.  REG_DEVICES still reports the total. */
-static uint8_t  roms[DEV_MAX][8] __attribute__((aligned(4)));
+static uint8_t  roms[DEV_MAX][8];
 static uint32_t device_count;
 static uint32_t ds18b20_count;
 
 static int16_t  temp_raw[DEV_MAX];
 static uint8_t  temp_status[DEV_MAX];
-static uint8_t  sp_sel[9] __attribute__((aligned(4)));
-static uint8_t  eeprom_data[8] __attribute__((aligned(4)));
+static uint8_t  sp_sel[9];
+static uint8_t  eeprom_data[8];
 static uint8_t  eeprom_status;
 
 static uint32_t manager_state;
-static uint8_t  manager_sub;        /* where inside the state the CPU is */
 static uint8_t  pause_requested;
 static uint8_t  paused;
 static uint32_t search_started;
@@ -88,11 +86,6 @@ void manager_command(uint8_t cmd)
 uint8_t manager_state_reg(void)
 {
     return (uint8_t)(manager_state | (paused ? 0x80u : 0u));
-}
-
-uint8_t manager_subphase(void)
-{
-    return manager_sub;
 }
 
 /* Test helper: force the manager state (tests only). */
@@ -160,7 +153,6 @@ static void crc_table_init(void)
 
 static uint8_t  shadow[256] __attribute__((aligned(4)));
 static uint8_t  pub_phase;
-static uint8_t  pub_fill_step;
 static uint32_t pub_pos;
 static uint16_t pub_crc;
 static uint16_t cycle_next;
@@ -176,7 +168,6 @@ static bool crc_skip(uint32_t i)
 {
     return (i == REG_FLAGS) || (i == REG_SEQ) ||
            ((i >= REG_FRAMES) && (i <= REG_SPEED)) ||
-           ((i >= REG_DT_FULL) && (i <= REG_POLL_GAP_SUB)) ||
            ((i >= REG_CMD) && (i <= REG_DIAG_REASON)) ||
            ((i >= REG_MAX_STEP) && (i <= REG_EEP_POLL));
 }
@@ -184,19 +175,12 @@ static bool crc_skip(uint32_t i)
 /* One 64-byte quarter of the 256-byte map, copied in words.  The whole map is
  * four chunks: a full copy measured 14 us, which sits on the slave's ~20 us
  * service budget at 400 kHz. */
-/* One 16-byte slice of the map, copied in words.  A 64-byte quarter measured
- * ~10 us together with the commit and blocked the polled I2C service long
- * enough to lose bytes at 400 kHz. */
-#define PUB_COPY    16u
-#define PUB_CRC      8u
-#define PUB_COMMIT   8u
-
 static void map_copy_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
 {
     uint32_t *d = (uint32_t *)(void *)(dst + pos);
     const uint32_t *s = (const uint32_t *)(const void *)(src + pos);
 
-    for (uint32_t i = 0u; i < (PUB_COPY / 4u); i++) {
+    for (uint32_t i = 0u; i < 16u; i++) {
         d[i] = s[i];
     }
 }
@@ -206,14 +190,10 @@ static void map_copy_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
  * host write made in the middle of the copy. */
 static void map_commit_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
 {
-    uint32_t end = pos + PUB_COMMIT;
+    uint32_t end = pos + 64u;
 
     for (uint32_t i = pos; i < end; i++) {
-        /* REG_SEQ is owned by the publish itself: copying the shadow value
-         * over it turns the odd "update in progress" marker back to an even
-         * value in the middle of the commit, and a host reading then sees a
-         * snapshot that looks stable but does not match its CRC. */
-        if ((i == REG_SEQ) || ((i >= REG_CMD) && (i <= REG_FAULT))) {
+        if ((i >= REG_CMD) && (i <= REG_FAULT)) {
             continue;
         }
         dst[i] = src[i];
@@ -227,10 +207,8 @@ static void crc_skip_table_init(void)
     }
 }
 
-/* The fill is split into four steps as well: the 16-slot temperature and ROM
- * loops together measured ~6 us, which is longer than the polled slave can be
- * away from the bus at 400 kHz. */
-static void fill_header(uint8_t *dst)
+/* Build the next snapshot into the shadow buffer. */
+static void publish_fill(uint8_t *dst)
 {
     uint8_t flags = FLAG_SNAPSHOT | FLAG_SEARCH_DONE;
     if (search_error != 0u) {
@@ -253,10 +231,7 @@ static void fill_header(uint8_t *dst)
     dst[REG_CYCLE_L] = (uint8_t)(cycle_next & 0xFFu);
     dst[REG_CYCLE_H] = (uint8_t)(cycle_next >> 8);
     dst[REG_SPEED] = (uint8_t)g_i2c_speed;
-}
 
-static void fill_temps(uint8_t *dst)
-{
     for (uint32_t i = 0u; (i < ds18b20_count) && (i < DEV_MAX); i++) {
         dst[REG_TEMP + 2u * i] = (uint8_t)((uint16_t)temp_raw[i] & 0xFFu);
         dst[REG_TEMP + 2u * i + 1u] = (uint8_t)((uint16_t)temp_raw[i] >> 8);
@@ -269,11 +244,8 @@ static void fill_temps(uint8_t *dst)
         dst[REG_TEMP + 2u * i + 1u] = 0x80u;      /* 0x8000 = invalid */
         dst[REG_TEMP_STATUS + i] = 0xFFu;
     }
-}
 
-static void fill_eeprom(uint8_t *dst)
-{
-    ow_copy8((void *)&dst[REG_EEPROM], eeprom_data);
+    memcpy((void *)&dst[REG_EEPROM], eeprom_data, 8u);
     dst[REG_EEPROM_STATUS] = eeprom_status;
 
     /* A selection outside the DS18B20 table must not expose a stale
@@ -282,22 +254,15 @@ static void fill_eeprom(uint8_t *dst)
         memset(sp_sel, 0xFF, sizeof(sp_sel));
     }
 
-    ow_copy9((uint8_t *)&dst[REG_SCRATCH], sp_sel);
-}
+    memcpy((void *)&dst[REG_SCRATCH], sp_sel, 9u);
 
-static void fill_roms(uint8_t *dst, uint32_t first, uint32_t count)
-{
-    if (roms_dirty == 0u) {
-        return;
-    }
-    for (uint32_t i = first; i < (first + count); i++) {
-        if ((i < device_count) && (i < DEV_MAX)) {
-            ow_copy8((void *)&dst[REG_ROMS + 8u * i], roms[i]);
-        } else {
-            ow_fill8_ff((void *)&dst[REG_ROMS + 8u * i]);
+    if (roms_dirty != 0u) {
+        for (uint32_t i = 0u; (i < device_count) && (i < DEV_MAX); i++) {
+            memcpy((void *)&dst[REG_ROMS + 8u * i], roms[i], 8u);
         }
-    }
-    if ((first + count) >= DEV_MAX) {
+        for (uint32_t i = device_count; i < DEV_MAX; i++) {
+            memset((void *)&dst[REG_ROMS + 8u * i], 0xFF, 8u);
+        }
         roms_dirty = 0u;
     }
 }
@@ -310,44 +275,20 @@ static void publish_step(void){
     uint32_t t0 = NOW_CYCLES();
     uint8_t ph_in = pub_phase;
 
-    manager_sub = (uint8_t)(9u + ph_in);
-
     switch (pub_phase) {
     case 0u:
-        if (pub_pos < 256u) {
-            map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
-            pub_pos += PUB_COPY;
-            break;
-        }
-        switch (pub_fill_step) {
-        case 0u:
-            fill_header(shadow);
-            pub_fill_step = 1u;
-            break;
-        case 1u:
-            fill_temps(shadow);
-            pub_fill_step = 2u;
-            break;
-        case 2u:
-            fill_eeprom(shadow);
-            pub_fill_step = 3u;
-            break;
-        case 3u:
-            fill_roms(shadow, 0u, 8u);
-            pub_fill_step = 4u;
-            break;
-        default:
-            fill_roms(shadow, 8u, 8u);
-            pub_fill_step = 0u;
+        map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
+        pub_pos += 64u;
+        if (pub_pos >= 256u) {
+            publish_fill(shadow);
             pub_crc = 0xFFFFu;
             pub_pos = 0u;
             pub_phase = 1u;
-            break;
         }
         break;
 
     case 1u: {
-        uint32_t end = pub_pos + PUB_CRC;
+        uint32_t end = pub_pos + 32u;
 
         if (end > 256u) {
             end = 256u;
@@ -386,7 +327,7 @@ static void publish_step(void){
             g_regs[REG_SEQ] = ++pub_seq;    /* odd: update in progress */
         }
         map_commit_chunk((uint8_t *)g_regs, (const uint8_t *)shadow, pub_pos);
-        pub_pos += PUB_COMMIT;
+        pub_pos += 64u;
         if (pub_pos >= 256u) {
             cycle = cycle_next;
             g_regs[REG_SEQ] = ++pub_seq;    /* even: snapshot stable */
@@ -434,7 +375,6 @@ uint32_t manager_eep_poll_max(void)
 
 static void manager_search(void)
 {
-    manager_sub = (search_started == 0u) ? 1u : 2u;
     ow_status_t st;
 
     if (search_started == 0u) {
@@ -454,7 +394,7 @@ static void manager_search(void)
     }
     if (st == OW_OK) {
         if (device_count < DEV_MAX) {
-            ow_copy8(roms[device_count], search.rom);
+            memcpy(roms[device_count], search.rom, 8u);
             if (search.rom[0] == 0x28u) {
                 ds18b20_count++;
             }
@@ -517,7 +457,6 @@ void manager_poll(void)
         break;
 
     case MGR_CONVERT:
-        manager_sub = (convert_started == 0u) ? 3u : 4u;
         if (convert_started == 0u) {
             if (ow_hal_busy()) {
                 return;
@@ -545,7 +484,6 @@ void manager_poll(void)
         break;
 
     case MGR_READ:
-        manager_sub = (read_started == 0u) ? 5u : 6u;
         /* device_count counts every device the search found, while roms[]
          * stores at most DEV_MAX of them: walk only the stored range. */
         while ((read_dev < rom_count()) && (roms[read_dev][0] != 0x28u)) {
@@ -578,7 +516,7 @@ void manager_poll(void)
                 last_error = (uint32_t)st;
             }
             if (read_sensor == (uint32_t)(g_regs[REG_SELECTED] & 0x0Fu)) {
-                ow_copy9(sp_sel, sensor.sp);
+                memcpy(sp_sel, sensor.sp, 9u);
             }
             read_dev++;
             read_sensor++;
@@ -590,7 +528,6 @@ void manager_poll(void)
         uint32_t i;
         uint32_t found = 0;
 
-        manager_sub = (eeprom_started == 0u) ? 7u : 8u;
         if (eeprom_started == 0u) {
             uint32_t t0 = NOW_CYCLES();
             uint32_t d;
@@ -640,10 +577,7 @@ void manager_poll(void)
     }
 
     case MGR_PUBLISH:
-        /* A publish must not run while the bus is busy: the snapshot would be
-         * left with REG_SEQ odd, and a host that reads continuously would
-         * never let it finish.  The main loop also gates the manager, so this
-         * is the authoritative check. */
+        /* I2C bridge must not be in the middle of a transaction. */
         if (manager_i2c_busy()) {
             return;
         }
@@ -651,7 +585,6 @@ void manager_poll(void)
         break;
 
     case MGR_WAIT:
-        manager_sub = 12u;
         if (!ow_delay_poll()) {
             return;
         }
@@ -664,11 +597,6 @@ void manager_poll(void)
         break;
     }
 }
-
-
-
-
-
 
 
 

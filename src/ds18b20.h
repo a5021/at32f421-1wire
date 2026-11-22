@@ -23,7 +23,7 @@ typedef struct {
     /* private */
     uint8_t  phase;
     uint8_t  stage;
-    uint8_t  sp[9] __attribute__((aligned(4)));
+    uint8_t  sp[9];
     uint8_t  cmd[10];               /* command packet, expanded in chunks */
     uint8_t  cmd_len;
     int16_t  raw;
