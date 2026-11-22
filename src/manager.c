@@ -598,7 +598,10 @@ void manager_poll(void)
     }
 
     case MGR_PUBLISH:
-        /* I2C bridge must not be in the middle of a transaction. */
+        /* A publish must not run while the bus is busy: the snapshot would be
+         * left with REG_SEQ odd, and a host that reads continuously would
+         * never let it finish.  The main loop also gates the manager, so this
+         * is the authoritative check. */
         if (manager_i2c_busy()) {
             return;
         }

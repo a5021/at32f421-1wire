@@ -129,7 +129,7 @@ bool ow_read_start(uint16_t len)
 
 /* Three bytes per call: unpacking all nine held the CPU longer than the I2C
  * slave's service budget allows. */
-#define OW_RX_CHUNK 3u
+#define OW_RX_CHUNK 1u
 
 ow_status_t ow_read_poll(uint8_t *dst)
 {
