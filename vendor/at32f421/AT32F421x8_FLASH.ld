@@ -84,10 +84,10 @@ SECTIONS
   {
     . = ALIGN(4);
     _sramfunc = .;
-    *(.ramfunc)
-    *(.ramfunc*)
-    *(.text.ramfunc)
-    *(.text.ramfunc*)
+    KEEP(*(.ramfunc))
+    KEEP(*(.ramfunc*))
+    KEEP(*(.text.ramfunc))
+    KEEP(*(.text.ramfunc*))
     . = ALIGN(4);
     _eramfunc = .;
   } >RAM AT> FLASH

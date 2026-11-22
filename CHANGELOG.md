@@ -9,8 +9,9 @@
   old polled path for comparison and for 100 kHz.
 - **Bridge:** the byte service (`i2c_poll`, `reg_byte`, `i2c_send_byte` and the
   ISR wrapper) is copied to SRAM at boot (`.ramfunc`): flash wait states alone
-  cost more than the master's 1.44 us low period at 400 kHz. `app/main.c` is
-  compiled without LTO so the section survives.
+  cost more than the master's 1.44 us low period at 400 kHz. The functions are
+  `noinline, used` and the linker keeps the section with `KEEP`, so LTO stays
+  enabled and still inlines the callees into the RAM code.
 - **Bridge:** the first byte of a read is computed when the register pointer
   arrives and written immediately after `ADDR` is retired. Together with the
   interrupt service this removed the MSB loss that made every short read start
