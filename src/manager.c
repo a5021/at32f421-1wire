@@ -209,7 +209,11 @@ static void map_commit_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
     uint32_t end = pos + PUB_COMMIT;
 
     for (uint32_t i = pos; i < end; i++) {
-        if ((i >= REG_CMD) && (i <= REG_FAULT)) {
+        /* REG_SEQ is owned by the publish itself: copying the shadow value
+         * over it turns the odd "update in progress" marker back to an even
+         * value in the middle of the commit, and a host reading then sees a
+         * snapshot that looks stable but does not match its CRC. */
+        if ((i == REG_SEQ) || ((i >= REG_CMD) && (i <= REG_FAULT))) {
             continue;
         }
         dst[i] = src[i];
