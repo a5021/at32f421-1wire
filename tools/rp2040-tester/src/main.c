@@ -41,6 +41,7 @@ int  fuzz_run(uint32_t seed, uint32_t ops, uint32_t *digest);
 void stress_run(uint32_t count);
 void repeat_run(uint8_t reg, uint32_t len, uint32_t n);
 void diag_run(void);
+void sweep_run(uint32_t n);
 void couple_run(uint32_t count);
 void stall_run(uint32_t count);
 
@@ -834,6 +835,7 @@ static const cmd_desc_t command_table[] = {
     { "stress", "stress [n]", "n map reads at the current link speed" },
     { "repeat", "repeat <reg> <len> <n>", "n reads of one register block, with underrun counters" },
     { "diag", "diag", "underrun forensics, one register per transaction" },
+    { "sweep", "sweep [n]", "speed x block matrix, one line per point" },
     { "couple", "couple [n]", "same, with a strong 1-Wire load in every frame" },
     { "stall", "stall [n]", "same, with a 200 us CPU stall at byte 64" },
     { "rawspeed", "rawspeed <hz>", "set the master clock directly (calibration)" },
@@ -1051,6 +1053,11 @@ static void handle_line(char *line)
         stress_run(count == 0u ? 1000u : count);
         return;
     }
+    if (strcmp(cmd, "sweep") == 0) {
+        uint32_t count = (arg[0] != '\0') ? (uint32_t)strtoul(arg, NULL, 0) : 20000u;
+        sweep_run(count);
+        return;
+    }
     if (strcmp(cmd, "diag") == 0) {
         diag_run();
         return;
@@ -1192,5 +1199,6 @@ int main(void)
         tight_loop_contents();
     }
 }
+
 
 

@@ -482,6 +482,64 @@ void diag_run(void)
     print_diag();
 }
 
+/* Speed x block-length matrix in one command: one line per point instead of
+ * a full stress transcript. */
+void sweep_run(uint32_t n)
+{
+    static const uint16_t lens[3] = { 1u, 2u, 8u };
+    static const uint8_t  regs[3] = { REG_MAGIC, 0x6Au, REG_ROMS };
+    static const uint32_t khz[3] = { 100u, 300u, 400u };
+
+    if (n == 0u) {
+        n = 20000u;
+    }
+    printf("sweep %u reads/point\n", (unsigned)n);
+    for (int s = 0; s < 3; s++) {
+        bus_set_speed(BUS_SPEED_100K);
+        (void)write_speed(khz[s] > 100u ? 1u : 0u);
+        sleep_ms(30u);
+        bus_set_speed(khz[s] == 100u ? BUS_SPEED_100K : (khz[s] * 11u) / 10u);
+        sleep_ms(30u);
+        for (int p = 0; p < 3; p++) {
+            uint8_t buf[8];
+            uint8_t ref[8];
+            uint32_t ok = 0u;
+            uint32_t wbad = 0u;
+            uint32_t rbad = 0u;
+            uint32_t diff = 0u;
+            int have_ref = 0;
+
+            for (uint32_t i = 0u; i < n; i++) {
+                int w = bus_write_reg(regs[p], NULL, 0u);
+                int r = (w == 0) ? bus_read_only(buf, lens[p]) : -1;
+
+                if (w != 0) {
+                    wbad++;
+                } else if (r != (int)lens[p]) {
+                    rbad++;
+                } else {
+                    ok++;
+                    if (!have_ref) {
+                        if (ok >= 8u) {
+                            memcpy(ref, buf, lens[p]);
+                            have_ref = 1;
+                        }
+                    } else if (memcmp(ref, buf, lens[p]) != 0) {
+                        diff++;
+                    }
+                }
+                if ((i % 256u) == 0u) {
+                    service();
+                }
+            }
+            printf("%3u kHz 0x%02X x%u: %u ok %u wbad %u rbad %u diff\n",
+                   (unsigned)khz[s], regs[p], (unsigned)lens[p],
+                   (unsigned)ok, (unsigned)wbad, (unsigned)rbad,
+                   (unsigned)diff);
+        }
+    }
+}
+
 void repeat_run(uint8_t reg, uint32_t len, uint32_t n)
 {
     uint8_t buf[256];
