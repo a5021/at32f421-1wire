@@ -17,6 +17,8 @@ Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 | 400 kHz, `stress 20000`, cycle running | 20000 good, 0-25 retries per run, FAIL |
 | 400 kHz, `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
 | 400 kHz, `stress 20000`, PA10 floating (no 1-Wire devices) | 3/3 runs, 0 retries, PASS |
+| 400 kHz, `stress 20000`, 100 uF on the 3.3 V rail | 7/8/7 retries, FAIL |
+| 400 kHz, `stress 20000`, 1-Wire DMA priority lowered | 4/10/4 retries, FAIL |
 | 100 kHz, `stress 20000`, cycle running | 20000 good, 11 retries (6 nack, 5 tails), 517 s, FAIL |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
@@ -58,6 +60,10 @@ are electrical or bus-load driven, not I2C-slave CPU timing.
 2. Cheap variant first: one sensor on a short wire, then the full 9-device
    cable, and compare the retry count over 3 runs each.
 3. Only after that: revisit the post-e9ba176 candidates (publish slicing).
+
+Tried and useless: 100 uF on the 3.3 V rail (7/8/7 retries) and lowering the
+1-Wire DMA priority to low (4/10/4, inside the run-to-run spread).  Both were
+reverted; firmware is at e9ba176 again.
 
 ## Commands
 

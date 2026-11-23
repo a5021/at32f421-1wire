@@ -1,12 +1,3 @@
-stress 20000
-stress 20000: 20000 good, 0 torn, 0 invalid, 0 errors, max 6326 us
-errors: 0 timeout, 0 nack, 0 other; transport 0, validate 0, retries 0, last: , val:  []
-retry phase: busy 0, idle 0, unknown 0
-retry manager: search 0 convert 0 read 0 eeprom 0 publish 0 wait 0
-retry transport steps: seq-in 0, map 0, seq-out 0
-retry bit positions: b0 0 b1 0 b2 0 b3 0 b4 0 b5 0 b6 0 b7 0
-retry offsets: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 unknown 0
-max manager step: 10 us, state 4; ouf 1@17; eep start 1 us, poll 5 us
-ouf last pos 1 ptr 11
-RESULT: PASS
+rescan
+rescan queued
 > [K
