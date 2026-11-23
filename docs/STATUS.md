@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-11-22
+Updated: 2026-11-23
 
 ## Decision
 
@@ -14,7 +14,7 @@ Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 | setup | result |
 |-------|--------|
 | 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
-| 400 kHz, `stress 20000`, cycle running | 20000 good, 5 retries, all 0xFF tails, FAIL |
+| 400 kHz, `stress 20000`, cycle running | 20000 good, 0-25 retries per run, FAIL |
 | 400 kHz, `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
 | 100 kHz, `stress 20000`, cycle running | 20000 good, 11 retries (6 nack, 5 tails), 517 s, FAIL |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
@@ -38,12 +38,18 @@ map read, so this is not the bus speed margin.  The manager state at a retry is
 `read` or `eeprom`, never `publish`, and the worst manager step stays 10 us.
 `run full` T36 soak shows the same signature: 2 retries, both at offset 64.
 
+Measured with temporary instrumentation (since removed), 400 kHz, cycle on:
+- worst gap between `i2c_poll()` calls: 11 us against a 22.5 us byte budget;
+- long frame stopped before byte 256: 0 occurrences while retries happened;
+- run-to-run spread on the same build: 0, 1, 4, 5, 11, 25 retries per 20000
+  reads, so a single run proves nothing.
+
 ## Next
 
-1. Single hypothesis: a 1-Wire step starves `i2c_poll()` long enough to miss
-   the TX window.  Measure the worst gap between `i2c_poll()` calls
-   (instrumentation only, no behaviour change), then feed `i2c_poll()` from
-   inside that gap.
+1. Single hypothesis: the remaining nack/0xFF tails are electrical coupling
+   from 1-Wire switching (edges, strong pullup), not CPU timing.  Test with a
+   scope on SCL/SDA during a stress run, or repeat stress with all 1-Wire
+   devices unplugged but the cycle still running.
 2. Only after that: revisit the post-e9ba176 candidates (publish slicing).
 
 ## Commands
@@ -55,8 +61,10 @@ tools/bench.ps1 -Profile full
 tools/bench.ps1 -Flash -Cmd "repeat 0x00 1 50000" -Speed 400
 ```
 
-Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
-`C:\Users\mr.smith\at32f421-1wire-baseline` (detached at e9ba176).
+Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. `-Tester` resolves the
+`RPI-RP2` volume by label; the drive letter changes and must not be hardcoded.
+Baseline worktree: `C:\Users\mr.smith\at32f421-1wire-baseline` (detached at
+e9ba176).
 
 ## Rejected (do not repeat)
 
@@ -65,6 +73,10 @@ Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
   firmware includes those bytes, and a skipped zero still advances the CRC, so
   every map read failed. Fixed 2026-11-22 in `tests.c`; keep tester and firmware
   `crc_skip` sets identical.
+- CPU starvation of `i2c_poll()` during 1-Wire work: worst measured gap was
+  11 us against a 22.5 us byte budget at 400 kHz, with retries present.
+- A premature STOP cutting a long read: a long-frame early-stop counter stayed
+  0 across runs that did retry.
 - Tester OUF-counter delta as a verdict: reads of `REG_OUF_END` (0x4A) and the
   two-byte `REG_DIAG_ACK`+`REG_DIAG_REASON` transfer are not stable on this
   slave (saw 130 -> 37 and 0x00 -> 0x80 on a zero register).  The stress

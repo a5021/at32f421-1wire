@@ -41,11 +41,16 @@ if ($Tester) {
     $t = New-Object System.IO.Ports.SerialPort $Port,115200,None,8,one
     $t.DtrEnable = $true
     try { $t.Open(); $t.WriteLine("bootsel"); Start-Sleep -Milliseconds 600; $t.Close() } catch {}
+    # The Pico bootloader mounts as the RPI-RP2 volume; its letter is assigned
+    # by Windows and must not be hardcoded (E: may be another drive).
+    $rp = $null
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 300
-        if (Test-Path "E:\") { break }
+        $v = Get-Volume -FileSystemLabel "RPI-RP2" -ErrorAction SilentlyContinue
+        if ($v -and $v.DriveLetter) { $rp = "$($v.DriveLetter):\"; break }
     }
-    Copy-Item $uf2 "E:\i2c_tester.uf2" -Force
+    if (-not $rp) { throw "RPI-RP2 volume not found" }
+    Copy-Item $uf2 (Join-Path $rp "i2c_tester.uf2") -Force
     Start-Sleep -Seconds 9
 }
 
