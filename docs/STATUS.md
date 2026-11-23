@@ -14,7 +14,9 @@ Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 | setup | result |
 |-------|--------|
 | 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
-| 400 kHz, `stress 20000` | 20000 good, 0 torn, 0 invalid, 0 errors, 4 retries (1 OUF), FAIL by zero tolerance |
+| 400 kHz, `stress 20000`, cycle running | 20000 good, 5 retries, all 0xFF tails, FAIL |
+| 400 kHz, `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
+| 100 kHz, `stress 20000`, cycle running | 20000 good, 11 retries (6 nack, 5 tails), 517 s, FAIL |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
 | `run full` (400 kHz) | 55/55 passed, 190 s |
@@ -27,18 +29,22 @@ A single `reg` read taken exactly when the manager runs can still lose the MSB
 read follow each other.  This is the same 1.44 us window, not a new defect.
 
 `stress 20000` is clean on data (0 torn, 0 invalid, 0 errors) but fails the
-zero-tolerance verdict on 4 retries: three map reads landed on a publish
-(offsets 25/64/6, re-read clean), and one was a transmit underrun (`ouf 1@17`)
-that returned an all-0xFF tail once and re-read clean.  `run full` T36 soak
-shows the same publish-race signature: 2 retries, both at offset 64.
+zero-tolerance verdict on retries, and every retry is a tail of 0xFF starting
+at a random offset (64, 120, 149): the slave stops handing over bytes, it is
+not a bit flip.  Retries happen only while the 1-Wire cycle runs: with `cmd 4`
+(pause) the same run is 20000/20000 with 0 retries at 400 kHz.  At 100 kHz the
+count rises to 11 and adds 6 nack on the single-byte reads around the 256-byte
+map read, so this is not the bus speed margin.  The manager state at a retry is
+`read` or `eeprom`, never `publish`, and the worst manager step stays 10 us.
+`run full` T36 soak shows the same signature: 2 retries, both at offset 64.
 
 ## Next
 
-1. `stress 20000` is FAIL by zero tolerance (4 retries, 1 OUF at 400 kHz).
-   Decide whether that budget is acceptable, or whether the publish race is
-   worth one more attempt; only then revisit the post-e9ba176 candidates
-   (publish slicing).
-2. Nothing else is pending: `run full` is 55/55 on this baseline.
+1. Single hypothesis: a 1-Wire step starves `i2c_poll()` long enough to miss
+   the TX window.  Measure the worst gap between `i2c_poll()` calls
+   (instrumentation only, no behaviour change), then feed `i2c_poll()` from
+   inside that gap.
+2. Only after that: revisit the post-e9ba176 candidates (publish slicing).
 
 ## Commands
 
@@ -59,6 +65,10 @@ Tester: COM10, 115200; Ctrl-C twice, wait for `ready:`. Baseline worktree:
   firmware includes those bytes, and a skipped zero still advances the CRC, so
   every map read failed. Fixed 2026-11-22 in `tests.c`; keep tester and firmware
   `crc_skip` sets identical.
+- Tester OUF-counter delta as a verdict: reads of `REG_OUF_END` (0x4A) and the
+  two-byte `REG_DIAG_ACK`+`REG_DIAG_REASON` transfer are not stable on this
+  slave (saw 130 -> 37 and 0x00 -> 0x80 on a zero register).  The stress
+  verdict now uses retries only.
 - I2C interrupts, SRAM service, first-byte precompute, 64-poll burst,
   publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
