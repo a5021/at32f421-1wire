@@ -16,6 +16,7 @@ Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 | 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
 | 400 kHz, `stress 20000`, cycle running | 20000 good, 0-25 retries per run, FAIL |
 | 400 kHz, `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
+| 400 kHz, `stress 20000`, PA10 floating (no 1-Wire devices) | 3/3 runs, 0 retries, PASS |
 | 100 kHz, `stress 20000`, cycle running | 20000 good, 11 retries (6 nack, 5 tails), 517 s, FAIL |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
@@ -44,13 +45,19 @@ Measured with temporary instrumentation (since removed), 400 kHz, cycle on:
 - run-to-run spread on the same build: 0, 1, 4, 5, 11, 25 retries per 20000
   reads, so a single run proves nothing.
 
+With PA10 lifted off the board (1-Wire devices gone, cycle still running, map
+frozen with `TEMP_ERROR`) three stress runs in a row were 20000/20000 with 0
+retries.  The remaining faults therefore need the 1-Wire bus attached: they
+are electrical or bus-load driven, not I2C-slave CPU timing.
+
 ## Next
 
-1. Single hypothesis: the remaining nack/0xFF tails are electrical coupling
-   from 1-Wire switching (edges, strong pullup), not CPU timing.  Test with a
-   scope on SCL/SDA during a stress run, or repeat stress with all 1-Wire
-   devices unplugged but the cycle still running.
-2. Only after that: revisit the post-e9ba176 candidates (publish slicing).
+1. Reconnect PA10 and find the coupling: scope on SDA/SCL and on the 1-Wire
+   rail during a stress run.  Candidates: strong-pullup current on the shared
+   3.3 V rail, cable length/ground return, missing series resistors.
+2. Cheap variant first: one sensor on a short wire, then the full 9-device
+   cable, and compare the retry count over 3 runs each.
+3. Only after that: revisit the post-e9ba176 candidates (publish slicing).
 
 ## Commands
 
