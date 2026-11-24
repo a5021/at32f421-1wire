@@ -46,6 +46,13 @@ static uint32_t ok_count;
 static uint32_t err_count;
 static uint32_t cycle;
 static uint8_t  pub_seq;
+static uint32_t wait_cycles;        /* MGR_WAIT passes since the last search */
+static uint8_t  rescan_auto;        /* this search was periodic, keep readings */
+
+/* A bridge that only searches at boot never notices a sensor that is plugged
+ * in later.  Search again on a slow cadence, and keep searching while no
+ * DS18B20 is known so a hot-plug is picked up within a cycle or two. */
+#define RESCAN_CYCLES           60u
 
 /* Latched by the I2C bridge at STOP; consumed by manager_poll(). */
 static uint32_t g_cmd;
@@ -117,6 +124,7 @@ void manager_init(void)
     manager_state = MGR_SEARCH;
     search_started = 0;
     roms_dirty = 1;
+    g_cmd = 0u;                 /* a latched command belongs to no session */
 }
 
 static void clear_results(void)
@@ -411,7 +419,10 @@ static void manager_search(void)
         search_error = (uint32_t)st;
     }
 
-    clear_results();
+    if (rescan_auto == 0u) {
+        clear_results();
+    }
+    rescan_auto = 0u;
     manager_state = (ds18b20_count != 0u && search_error == 0u) ? MGR_CONVERT
                                                                : MGR_EEPROM;
 }
@@ -462,7 +473,12 @@ void manager_poll(void)
                 return;
             }
             clear_results();
-            ds18b20_convert_start(&sensor, 0);
+            if (!ds18b20_convert_start(&sensor, 0)) {
+                last_error = (uint32_t)OW_PARAM;
+                err_count++;
+                manager_state = MGR_EEPROM;
+                return;
+            }
             convert_started = 1;
             return;
         }
@@ -497,7 +513,20 @@ void manager_poll(void)
             if (ow_hal_busy()) {
                 return;
             }
-            ds18b20_read_start(&sensor, roms[read_dev]);
+            if (!ds18b20_read_start(&sensor, roms[read_dev])) {
+                /* Refused start must not be published as a fresh reading of
+                 * whatever the previous sensor left in sensor.raw. */
+                temp_status[read_sensor] = (uint8_t)OW_PARAM;
+                temp_raw[read_sensor] = (int16_t)0x8000;
+                err_count++;
+                last_error = (uint32_t)OW_PARAM;
+                if (read_sensor == (uint32_t)(g_regs[REG_SELECTED] & 0x0Fu)) {
+                    memset(sp_sel, 0xFF, sizeof(sp_sel));
+                }
+                read_dev++;
+                read_sensor++;
+                return;
+            }
             read_started = 1;
             return;
         }
@@ -515,7 +544,8 @@ void manager_poll(void)
                 err_count++;
                 last_error = (uint32_t)st;
             }
-            if (read_sensor == (uint32_t)(g_regs[REG_SELECTED] & 0x0Fu)) {
+            if ((st == OW_OK) &&
+                (read_sensor == (uint32_t)(g_regs[REG_SELECTED] & 0x0Fu))) {
                 memcpy(sp_sel, sensor.sp, 9u);
             }
             read_dev++;
@@ -587,6 +617,16 @@ void manager_poll(void)
     case MGR_WAIT:
         if (!ow_delay_poll()) {
             return;
+        }
+        wait_cycles++;
+        if ((wait_cycles >= RESCAN_CYCLES) || (ds18b20_count == 0u)) {
+            wait_cycles = 0u;
+            search_started = 0u;
+            search_done = 0u;
+            rescan_auto = 1u;       /* keep the last readings while searching */
+            manager_state = MGR_SEARCH;
+            g_regs[REG_FLAGS] |= FLAG_BUSY;
+            break;
         }
         manager_state = (ds18b20_count != 0u) ? MGR_CONVERT : MGR_EEPROM;
         g_regs[REG_FLAGS] |= FLAG_BUSY;

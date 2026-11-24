@@ -1,20 +1,21 @@
 # Status
 
-Updated: 2026-11-23
+Updated: 2026-11-24
 
 ## Decision
 
-Firmware is back at `e9ba176`. It measured, with the current value-checking
-tester, at 400 kHz: 50 000 single-byte reads, 0 diff, 0 nack, 0 OUF. The
-IRQ/RAM/precompute/burst work after it was a regression and has been dropped.
-Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
+Firmware is `e9ba176` plus three robustness fixes (periodic rescan, strong
+pull-up release in the recovery paths, refused `start` no longer published as
+a fresh reading).  No timing or protocol change, so the I2C measurements below
+still apply.
 
-## Current numbers (e9ba176)
+## Current numbers (e9ba176 + P1 fixes)
 
 | setup | result |
 |-------|--------|
 | 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
-| 400 kHz, `stress 20000`, cycle running | 20000 good, 0-25 retries per run, FAIL |
+| 400 kHz, `stress 20000`, 9-device cable, cycle running | 20000 good, 0-25 retries per run, FAIL |
+| 400 kHz, `stress 20000`, one sensor, short wire, external power | 1/0/0 retries, 2 PASS of 3 |
 | 400 kHz, `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
 | 400 kHz, `stress 20000`, PA10 floating (no 1-Wire devices) | 3/3 runs, 0 retries, PASS |
 | 400 kHz, `stress 20000`, 100 uF on the 3.3 V rail | 7/8/7 retries, FAIL |
@@ -23,7 +24,7 @@ Only the test tooling was kept (repeat/diag/sweep, T51 without the MSB mask).
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
 | `run full` (400 kHz) | 55/55 passed, 190 s |
-| host tests | 332 checks, 0 failures |
+| host tests | 333 checks, 0 failures |
 
 ## Nuance
 
@@ -52,14 +53,24 @@ frozen with `TEMP_ERROR`) three stress runs in a row were 20000/20000 with 0
 retries.  The remaining faults therefore need the 1-Wire bus attached: they
 are electrical or bus-load driven, not I2C-slave CPU timing.
 
+One sensor on a short wire with external power, 400 kHz, three runs:
+1 / 0 / 0 retries (one nack during `wait`, no 1-Wire work in flight).  The
+strong pull-up is still engaged every cycle -- `ds18b20_init(&sensor, true)`
+in `manager.c` hardcodes parasite mode, so PA10 drives the line high for the
+whole 750 ms conversion -- and it produced no retries, so the pull-up current
+is not the coupling.  The difference between 0-1 and 4-25 retries is the
+9-device cable.  A residual address-phase nack remains at roughly 1e-5 even
+on the short wire; zero tolerance at 400 kHz is probably not reachable.
+
 ## Next
 
-1. Reconnect PA10 and find the coupling: scope on SDA/SCL and on the 1-Wire
-   rail during a stress run.  Candidates: strong-pullup current on the shared
-   3.3 V rail, cable length/ground return, missing series resistors.
-2. Cheap variant first: one sensor on a short wire, then the full 9-device
-   cable, and compare the retry count over 3 runs each.
-3. Only after that: revisit the post-e9ba176 candidates (publish slicing).
+1. Keep the one-sensor setup as the reference configuration: it is the first
+   configuration that passes the stress verdict.
+2. If the 9-device cable is still wanted: add series resistors at the far end
+   and shorten the I2C run, then repeat the 3-run comparison.
+3. Decide the acceptance budget: 0 delivered errors with <=1 retry per 20 000
+   reads, or a strict zero.  Current data argues the strict zero is not a
+   property of this slave.
 
 Tried and useless: 100 uF on the 3.3 V rail (7/8/7 retries) and lowering the
 1-Wire DMA priority to low (4/10/4, inside the run-to-run spread).  Both were

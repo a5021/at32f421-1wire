@@ -259,7 +259,12 @@ void ow_hal_strong_pullup(bool on)
         GPIOA->omode &= ~OW_PIN_MASK;           /* push-pull */
     } else {
         GPIOA->omode |= OW_PIN_MASK;            /* open-drain */
-        TMR1->cctrl &= ~(1u << 8);              /* C3EN off */
-        TMR1->ctrl1_bit.tmren = 0u;             /* stop the timer */
+        if (!ow_active) {
+            /* A pass in flight must not be killed here: no further update
+             * event would arrive, ow_hal_done() would stay false and the
+             * manager would wait on it forever. */
+            TMR1->cctrl &= ~(1u << 8);          /* C3EN off */
+            TMR1->ctrl1_bit.tmren = 0u;         /* stop the timer */
+        }
     }
 }

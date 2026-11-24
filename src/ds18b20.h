@@ -32,12 +32,14 @@ typedef struct {
 void        ds18b20_init(ds18b20_t *d, bool parasite);
 
 /* Convert T (0x44).  With parasitic power the strong pull-up is engaged
- * before the command is sent and released when the conversion time expires. */
-void        ds18b20_convert_start(ds18b20_t *d, const uint8_t *rom);
+ * before the command is sent and released when the conversion time expires.
+ * Returns false when the part is still busy, so the caller does not mistake a
+ * refused start for a finished conversion. */
+bool        ds18b20_convert_start(ds18b20_t *d, const uint8_t *rom);
 ow_status_t ds18b20_convert_poll(ds18b20_t *d);
 
 /* Read Scratchpad (0xBE), 9 bytes, CRC-8 checked. */
-void        ds18b20_read_start(ds18b20_t *d, const uint8_t *rom);
+bool        ds18b20_read_start(ds18b20_t *d, const uint8_t *rom);
 ow_status_t ds18b20_read_poll(ds18b20_t *d);
 
 /* convert -> wait -> read in one state machine. */

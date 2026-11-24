@@ -44,10 +44,10 @@ void ds18b20_init(ds18b20_t *d, bool parasite)
     d->phase = DS_PH_DONE;
 }
 
-void ds18b20_convert_start(ds18b20_t *d, const uint8_t *rom)
+bool ds18b20_convert_start(ds18b20_t *d, const uint8_t *rom)
 {
     if ((d == 0) || (d->phase != DS_PH_DONE) || ow_hal_busy()) {
-        return;
+        return false;
     }
     d->match_rom = (rom != 0);
     if (rom != 0) {
@@ -55,6 +55,7 @@ void ds18b20_convert_start(ds18b20_t *d, const uint8_t *rom)
     }
     d->stage = 0u;
     d->phase = DS_PH_RESET_ARM;
+    return true;
 }
 
 ow_status_t ds18b20_convert_poll(ds18b20_t *d)
@@ -147,16 +148,17 @@ ow_status_t ds18b20_convert_poll(ds18b20_t *d)
     }
 }
 
-void ds18b20_read_start(ds18b20_t *d, const uint8_t *rom)
+bool ds18b20_read_start(ds18b20_t *d, const uint8_t *rom)
 {
     if ((d == 0) || (d->phase != DS_PH_DONE) || ow_hal_busy()) {
-        return;
+        return false;
     }
     d->match_rom = (rom != 0);
     if (rom != 0) {
         memcpy(d->rom, rom, 8u);
     }
     d->phase = DS_PH_RESET_ARM;
+    return true;
 }
 
 ow_status_t ds18b20_read_poll(ds18b20_t *d)

@@ -251,7 +251,10 @@ static void health_clear(void)
     fault_pending = 0u;
     fault_drop_frame = 0u;
     fault_current = 0u;
-    forced_pullup = 0u;
+    if (forced_pullup != 0u) {
+        forced_pullup = 0u;
+        ow_hal_strong_pullup(false);    /* never leave PA10 driving high */
+    }
     fault_edges = 0u;
     stall_armed = 0u;
     tx_index = 0u;
@@ -409,7 +412,10 @@ static void i2c_bus_recover(void)
     fault_pending = 0u;
     fault_drop_frame = 0u;
     fault_current = 0u;
-    forced_pullup = 0u;
+    if (forced_pullup != 0u) {
+        forced_pullup = 0u;
+        ow_hal_strong_pullup(false);
+    }
     fault_edges = 0u;
     stall_armed = 0u;
     tx_index = 0u;
