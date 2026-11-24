@@ -440,51 +440,6 @@ void stress_run(uint32_t count)
     stress_loop(count, 0, "stress");
 }
 
-/* Narrow reproducer: read one register block over and over, so an underrun
- * can be tied to the block length and to the state of the manager. */
-/* One live register, retried: a multi-byte read of the live block can itself
- * be perturbed by the very underrun it is measuring. */
-static int read_u8(uint8_t reg, uint8_t *v)
-{
-    for (int i = 0; i < 3; i++) {
-        if (bus_read_reg(reg, v, 1u) == 1) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static void print_diag(void)
-{
-    static const uint8_t dregs[23] = {
-        REG_DT_FULL, REG_OUF_END, REG_OUF_MID, REG_ISR_MAX,
-        REG_OUF_STS1, REG_OUF_STS2, REG_OUF_AGE, REG_ADDR_DT,
-        REG_OUF_REG_PTR, REG_SLOW_COUNT, REG_SLOW_US, REG_SLOW_STATE,
-        REG_SLOW_SUB, REG_MAX_SUB, REG_ACT_PREV, REG_ACT_DT,
-        REG_ACT_PREV2, REG_ACT_DT2, REG_ADDR_STALE, REG_POLL_GAP_L,
-        REG_POLL_GAP_H, REG_POLL_GAP_STATE, REG_POLL_GAP_SUB
-    };
-    uint8_t v[23];
-
-    for (int i = 0; i < 23; i++) {
-        if (!read_u8(dregs[i], &v[i])) {
-            v[i] = 0xFFu;
-        }
-    }
-    printf("diag dtfull %u end %u mid %u isr %u us; ouf age %u sts1 %02X "
-           "sts2 %02X addr_dt %u us ptr %02X\n",
-           v[0], v[1], v[2], v[3], v[6], v[4], v[5], v[7], v[8]);
-    printf("slow %u us state %u sub %u maxsub %u; addr stale %u; "
-           "poll gap %u us state %u sub %u\n",
-           v[10], v[11], v[12], v[13], v[18],
-           (unsigned)((uint16_t)v[19] | ((uint16_t)v[20] << 8)), v[21], v[22]);
-}
-
-void diag_run(void)
-{
-    print_diag();
-}
-
 /* Speed x block-length matrix in one command: one line per point instead of
  * a full stress transcript. */
 void sweep_run(uint32_t n)
@@ -612,7 +567,6 @@ void repeat_run(uint8_t reg, uint32_t len, uint32_t n)
            (unsigned)(bus_err_timeout - t0err),
            (unsigned)(bus_err_nack - n0err),
            (unsigned)(bus_err_other - o0err));
-    print_diag();
 }
 
 /* Every read is preceded by a deliberate 1-Wire edge burst, so the crosstalk

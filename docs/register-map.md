@@ -25,7 +25,7 @@ Canonical description of the I2C slave register file exposed by
 | `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
 | `0x40..0x47` | 8 | `REG_EEPROM` | Last DS2431 read block |
 | `0x48` | 1 | `REG_EEPROM_STATUS` | DS2431 status (`0x00` = OK, `0xFF` = invalid) |
-| `0x49..0x5F` | 23 | diagnostics | Live counters, injected at read time and excluded from the map CRC (see below) |
+| `0x49..0x5F` | 23 | — | Reserved. Not implemented: reads back `0x00` and is covered by the map CRC |
 | `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters, `4` = pause, `5` = resume (writable) |
 | `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed (writable) |
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
@@ -59,9 +59,12 @@ Canonical description of the I2C slave register file exposed by
 ## Invalid-slot markers
 
 The bridge tracks the first 16 devices a search finds; `REG_DEVICES`
-still reports the total.
+still reports the total.  The temperature and status slots are indexed by
+DS18B20 ordinal (family `0x28` only), while the ROM slot is indexed by device
+ordinal, so the two indices diverge as soon as the bus carries a device of
+another family:
 
-| Slot | Temperature (`0x10 + 2i`) | Status (`0x30 + i`) | ROM (`0x80 + 8i`) |
+| Slot | Temperature (`0x10 + 2i`) | Status (`0x30 + i`) | ROM (`0x80 + 8j`) |
 |------|---------------------------|---------------------|-------------------|
 | unused | `0x8000` (invalid) | `0xFF` | all `0xFF` |
 
@@ -88,7 +91,7 @@ the four bytes cannot tear and no seqlock is needed.
 |-----|------|------|---------|
 | 0 | `0x01` | `HEALTH_BUSERR` | Illegal START/STOP position seen |
 | 1 | `0x02` | `HEALTH_ARLOST` | Arbitration lost (noise or a second master) |
-| 2 | `0x04` | `HEALTH_OUF` | Receive overrun |
+| 2 | `0x04` | `HEALTH_OUF` | Transmit underrun: the master clocked before the next byte was loaded |
 | 3 | `0x08` | `HEALTH_SDA_STUCK` | SDA held low for 10 ms with no matched address |
 | 4 | `0x10` | `HEALTH_RECOVERED` | Nine-clock recovery released the bus |
 
@@ -123,7 +126,7 @@ rather than silently accepted.
 | 5 | drop one frame count |
 | 6 | hold the 1-Wire strong pull-up for the whole frame |
 | 7 | run 64 1-Wire bit slots during the frame |
-| 8 | stall the CPU for 200 us at byte 64 of the frame |
+| 8 | stall the CPU at byte 64 of the frame for `(REG_SELECTED & 0x0F) * 20` us, minimum 20 us, maximum 300 us |
 
 Codes 4 and 5 give a digital ground truth for the health metric. Code 8
 demonstrates the real failure mode: a CPU stall inside a transfer corrupts
@@ -145,7 +148,6 @@ computing the same CRC:
 | `0x02` | `REG_FLAGS`: the busy bit toggles outside `publish()` |
 | `0x08` | `REG_SEQ`: intentionally odd while a publish is in progress |
 | `0x09..0x0F` | health block and `REG_SPEED`, injected at read time |
-| `0x49..0x5F` | live diagnostics: underrun forensics, ISR latency, service time |
 | `0x60..0x6F` | command latch, selection, fault, the CRC itself and the live diagnostics |
 | `0x79..0x7F` | worst-step and EEPROM timing counters, live |
 
@@ -172,8 +174,8 @@ DS18B20 count publishes `0xFF` in all nine scratchpad bytes instead of a
 stale scratchpad.
 `REG_CMD` is queued: if the manager is busy, the command runs when the
 current cycle reaches its idle state, and a later command overwrites a
-still-pending one. Only `1`, `2` and `3` are acted on; any other value is
-ignored. A command byte corrupted in flight is **not detectable** because
+still-pending one. Only `1`..`5` are acted on (`4` pauses, `5` resumes); any
+other value is ignored. A command byte corrupted in flight is **not detectable** because
 `REG_CMD` is excluded from the map CRC, but the blast radius is bounded:
 unknown commands do nothing, `REG_SPEED` accepts only `0`/`1`, and
 `REG_SELECTED` masks to the low nibble and falls back to the invalid

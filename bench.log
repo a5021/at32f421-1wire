@@ -1,7 +1,0 @@
-status
-uptime 1116 s, link 400 kHz
-target 0x42: ack
-last run: 55/55 passed, first fail -
-snapshot: 1 devices, 1 ds18b20, cycle 177, flags 0x0D
-health: DEGRADED, 6 txn, 0 missed, 0 truncated, flags 0x04
-> [K
