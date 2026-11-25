@@ -206,14 +206,19 @@ void ow_hal_read_pair(volatile uint8_t *dst2)
 
 void ow_hal_wait(uint32_t us)
 {
-    uint32_t n = (us + 65534u) / 65535u;
+    uint32_t n;
     uint32_t period;
 
+    /* TMR1 counts at 1 us with a 16-bit period and up to 256 updates, so the
+     * longest representable delay is 256 * 65535 us.  Saturate instead of
+     * letting (us + 65534) wrap, which used to turn a long delay into a short
+     * one. */
+    if (us > (256u * 65535u)) {
+        us = 256u * 65535u;
+    }
+    n = (us + 65534u) / 65535u;
     if (n == 0u) {
         n = 1u;
-    }
-    if (n > 256u) {
-        n = 256u;
     }
     period = (us + n - 1u) / n;
     if (period == 0u) {

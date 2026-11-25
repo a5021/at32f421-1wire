@@ -58,7 +58,7 @@ bool ds18b20_convert_start(ds18b20_t *d, const uint8_t *rom)
     return true;
 }
 
-ow_status_t ds18b20_convert_poll(ds18b20_t *d)
+static ow_status_t convert_poll_raw(ds18b20_t *d)
 {
     if (d == 0) {
         return OW_PARAM;
@@ -144,8 +144,20 @@ ow_status_t ds18b20_convert_poll(ds18b20_t *d)
 
     case DS_PH_DONE:
     default:
-        return OW_OK;
+        /* A second poll must report the result the operation ended with, not
+         * a fresh success: OW_NO_PRESENCE would turn into OW_OK here. */
+        return (ow_status_t)d->result;
     }
+}
+
+ow_status_t ds18b20_convert_poll(ds18b20_t *d)
+{
+    ow_status_t st = convert_poll_raw(d);
+
+    if ((d != 0) && (st != OW_BUSY)) {
+        d->result = (uint8_t)st;
+    }
+    return st;
 }
 
 bool ds18b20_read_start(ds18b20_t *d, const uint8_t *rom)
@@ -161,7 +173,19 @@ bool ds18b20_read_start(ds18b20_t *d, const uint8_t *rom)
     return true;
 }
 
+static ow_status_t read_poll_raw(ds18b20_t *d);
+
 ow_status_t ds18b20_read_poll(ds18b20_t *d)
+{
+    ow_status_t st = read_poll_raw(d);
+
+    if ((d != 0) && (st != OW_BUSY)) {
+        d->result = (uint8_t)st;
+    }
+    return st;
+}
+
+static ow_status_t read_poll_raw(ds18b20_t *d)
 {
     if (d == 0) {
         return OW_PARAM;
@@ -243,7 +267,7 @@ ow_status_t ds18b20_read_poll(ds18b20_t *d)
 
     case DS_PH_DONE:
     default:
-        return OW_OK;
+        return (ow_status_t)d->result;
     }
 }
 
@@ -289,6 +313,11 @@ ow_status_t ds18b20_temp_poll(ds18b20_t *d, int16_t *raw)
         ow_status_t st = ds18b20_read_poll(d);
         if ((st == OW_OK) && (raw != 0)) {
             *raw = d->raw;
+        }
+        if (st != OW_BUSY) {
+            /* The operation is over either way: a second poll must not re-run
+             * the read and report a fresh success. */
+            d->stage = 0u;
         }
         return st;
     }

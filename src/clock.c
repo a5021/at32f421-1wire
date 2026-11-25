@@ -112,7 +112,20 @@ void clock_config(void)
     CRM->pll_bit.pllfref = fref;
     CRM->pll_bit.pllcfgen = 0u;
     CRM->ctrl_bit.pllen = 1;
-    while (CRM->ctrl_bit.pllstbl == 0u) {
+    {
+        uint32_t guard = 4000000u;
+
+        while ((CRM->ctrl_bit.pllstbl == 0u) && (guard != 0u)) {
+            guard--;
+        }
+        if (CRM->ctrl_bit.pllstbl == 0u) {
+            /* No PLL, no hang: drop back to HICK, the reset clock, and let
+             * clock_ahb_hz() publish the frequency that is actually there. */
+            CRM->ctrl_bit.pllen = 0u;
+            CRM->cfg_bit.sclksel = 0u;          /* HICK */
+            system_core_clock = clock_ahb_hz();
+            return;
+        }
     }
 
     /* AHB, APB1 and APB2 all run at 120 MHz. */
@@ -121,7 +134,16 @@ void clock_config(void)
     CRM->cfg_bit.apb2div = 0u;
 
     CRM->cfg_bit.sclksel = 2u;                  /* PLL */
-    while (CRM->cfg_bit.sclksts != 2u) {
+    {
+        uint32_t guard = 100000u;
+
+        while ((CRM->cfg_bit.sclksts != 2u) && (guard != 0u)) {
+            guard--;
+        }
+        if (CRM->cfg_bit.sclksts != 2u) {
+            CRM->ctrl_bit.pllen = 0u;
+            CRM->cfg_bit.sclksel = 0u;          /* HICK */
+        }
     }
 
     /* Publish what the tree really runs at: the PLL field is decoded back

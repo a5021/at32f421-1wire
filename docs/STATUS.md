@@ -21,8 +21,8 @@ observe a half-committed register file.
 | 400 kHz, `stress 20000`, PA10 floating (no 1-Wire devices) | 3/3 runs, 0 retries, PASS |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
-| `run full` (400 kHz) | 52-53/55, 190 s; see Remaining |
-| host tests | 333 checks, 0 failures |
+| `run full` (400 kHz) | 53/55, 190 s; see Remaining |
+| host tests | 337 checks, 0 failures |
 
 Before P3 the same 400 kHz row was 146-191 retries per 20 000 reads.
 
@@ -71,14 +71,17 @@ on the short wire; zero tolerance at 400 kHz is probably not reachable.
 
 ## Remaining
 
-- `run full` 52-53/55.  T28/T29/T55 test the selected scratchpad and need a
-  successful read of the newly selected sensor within two cycles; a failed read
-  leaves the published scratchpad at 0xFF by design.  T35 reports 9886-9896
-  good of 10 000 because a publish inside a read changes `REG_SEQ` and the
-  tester counts that as torn (threshold 9900).  T50 reports "magic 0x??"
-  because the deliberately corrupted write lands on the magic byte.
+- `run full` 53/55.  T28 and T55 fail identically on `ed3796c` and on the
+  review build, so they are pre-existing: both depend on the selected
+  scratchpad being refreshed within two cycles, and T55 asks for a sensor index
+  that is not a DS18B20.  T48 flaked once ("missed 0, wrong-address acks 0") and
+  passed on the next run.
+- Single-shot tests still catch the address window: `T19 speed readback 129`
+  (0x01|0x80) and `T51 first byte 83` (0x03|0x80) appear in some runs and pass
+  in others.  That is the 1.44 us ADDR window, not a data-path error: T35's full
+  map CRC is intact in every run (invalid 0, errors 0).
 - Residual transport errors: about 1 write and 1 read per 20 000, both on the
-  9-device cable.  The 1.44 us address-phase window is still the suspect.
+  9-device cable.
 
 ## Next
 
@@ -93,6 +96,34 @@ on the short wire; zero tolerance at 400 kHz is probably not reachable.
 Tried and useless: 100 uF on the 3.3 V rail (7/8/7 retries) and lowering the
 1-Wire DMA priority to low (4/10/4, inside the run-to-run spread).  Both were
 reverted; firmware is at e9ba176 again.
+
+### Review fixes (2026-11-25)
+
+- `i2c_bus_recover()` wrote the levels into `GPIOA->omode`, which is the
+  output-mode field, and set `cfgr = 0x66`, which leaves PA0 in alternate
+  function: the nine recovery clocks never reached SCL.  Now `cfgr` selects
+  GPIO output for both pins (`0x05`), the levels go through `ODT`, SCL is read
+  back after every release, and the STOP is sent only when all nine clocks
+  actually went high.
+- A poll after a finished operation returned `OW_OK` regardless of the result,
+  so a `OW_NO_PRESENCE` turned into success one call later, and
+  `ds18b20_temp_poll()` kept `stage = 1` and re-ran the read.  Each driver now
+  stores the terminal status and the DONE phase returns it; the composite poll
+  clears its stage on any non-busy result.  Tests assert the sticky failure.
+- A failed periodic rescan used to zero the counts first and publish them over
+  the previous ROM map.  The search now stages into `roms_next` and copies into
+  `roms[]` only on `OW_END`, so a failed pass leaves the last good list.
+- `clock_config()` waits for PLL lock and the clock switch are bounded and fall
+  back to HICK; `ow_hal_wait()` saturates at 16.7 s instead of letting
+  `us + 65534` wrap; `ow_reset_start()` documents that the caller must check
+  `ow_hal_busy()` first.
+- T35 counted a publish that landed between its two `REG_SEQ` probes as a torn
+  read.  After P3 a frame comes from one snapshot (the swap happens at the
+  address match), so the probes disagree exactly when the publisher ran in the
+  gap: measured 310 crossings of 10 000 reads, matching the ~5 publishes/s the
+  cycle runs at while the link is busy; invalid and errors stayed 0.  The
+  tester now validates the map in that case instead of failing on the sequence
+  alone.
 
 ## Commands
 

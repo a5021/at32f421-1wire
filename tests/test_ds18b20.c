@@ -91,6 +91,9 @@ void test_ds18b20_run(void)
     ds18b20_convert_start(&d, 0);
     TF_CHECK_EQ(OW_NO_PRESENCE, spin_convert(&d));
     TF_CHECK(!mock_strong());
+    /* The failure is sticky: a later poll must repeat it, not report OW_OK. */
+    TF_CHECK_EQ(OW_NO_PRESENCE, ds18b20_convert_poll(&d));
+    TF_CHECK_EQ(OW_NO_PRESENCE, ds18b20_read_poll(&d));
 
     /* Full temperature cycle, +25.0625 C. */
     mock_reset();

@@ -393,23 +393,41 @@ static void i2c_bus_recover(void)
 {
     I2C2->ctrl1_bit.i2cen = 0;
 
-    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000066u;  /* OD output */
+    /* Both pins to open-drain GPIO output.  cfgr holds the mode field per pin
+     * ([1:0] PA0, [3:2] PA1) and 01 is output: 0x66 left PA0 in alternate
+     * function, so the clocks below never reached the pad.  omode=1 is
+     * open-drain, odt is the level. */
+    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000005u;
     GPIOA->omode |= 0x00000003u;
+    GPIOA->odt |= (SDA_BIT | SCL_BIT);
     spin_us(5u);
 
-    for (int i = 0; i < 9; i++) {
-        GPIOA->omode &= ~SCL_BIT;
-        spin_us(5u);
-        GPIOA->omode |= SCL_BIT;
-        spin_us(5u);
+    {
+        bool scl_ok = true;
+
+        for (int i = 0; i < 9; i++) {
+            GPIOA->odt &= ~SCL_BIT;
+            spin_us(5u);
+            GPIOA->odt |= SCL_BIT;
+            spin_us(5u);
+            /* Nobody may hold SCL down: if the pad still reads low after the
+             * release, the clocks are not reaching the bus and the STOP below
+             * would be meaningless. */
+            if ((GPIOA->idt & SCL_BIT) == 0u) {
+                scl_ok = false;
+                break;
+            }
+        }
+
+        if (scl_ok) {
+            GPIOA->odt &= ~SDA_BIT;     /* STOP: SDA low, SCL high, SDA high */
+            spin_us(5u);
+            GPIOA->odt |= SCL_BIT;
+            spin_us(5u);
+            GPIOA->odt |= SDA_BIT;
+            spin_us(5u);
+        }
     }
-
-    GPIOA->omode &= ~SDA_BIT;       /* STOP: SDA low, SCL high, SDA high */
-    spin_us(5u);
-    GPIOA->omode |= SCL_BIT;
-    spin_us(5u);
-    GPIOA->omode |= SDA_BIT;
-    spin_us(5u);
 
     GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x0000000Au;
     GPIOA->omode |= 0x00000003u;

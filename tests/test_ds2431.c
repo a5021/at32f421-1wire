@@ -245,7 +245,10 @@ void test_ds2431_run(void)
     mock_reset();
     ds2431_init(&d);
     TF_CHECK_EQ(OW_NO_PRESENCE, run_read(&d, 0, 0u, buf, 4u));
+    /* The failure is sticky, not replayed as OW_OK. */
+    TF_CHECK_EQ(OW_NO_PRESENCE, ds2431_read_poll(&d));
     TF_CHECK_EQ(OW_NO_PRESENCE, run_write(&d, 0, 0u, data));
+    TF_CHECK_EQ(OW_NO_PRESENCE, ds2431_write_poll(&d));
 
     /* Parameter guards. */
     mock_reset();

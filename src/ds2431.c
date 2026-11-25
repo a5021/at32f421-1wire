@@ -148,7 +148,19 @@ bool ds2431_read_start(ds2431_t *d, const uint8_t *rom, uint16_t addr,
     return true;
 }
 
+static ow_status_t read_poll_raw(ds2431_t *d);
+
 ow_status_t ds2431_read_poll(ds2431_t *d)
+{
+    ow_status_t st = read_poll_raw(d);
+
+    if ((d != 0) && (st != OW_BUSY)) {
+        d->result = (uint8_t)st;
+    }
+    return st;
+}
+
+static ow_status_t read_poll_raw(ds2431_t *d)
 {
     if (d == 0) {
         return OW_PARAM;
@@ -218,7 +230,9 @@ ow_status_t ds2431_read_poll(ds2431_t *d)
 
     case PH_DONE:
     default:
-        return OW_OK;
+        /* Report the result the operation ended with; a second poll must not
+         * turn a failure into OW_OK. */
+        return (ow_status_t)d->result;
     }
 }
 
@@ -253,7 +267,19 @@ bool ds2431_write_start(ds2431_t *d, const uint8_t *rom, uint16_t addr,
     return true;
 }
 
+static ow_status_t write_poll_raw(ds2431_t *d);
+
 ow_status_t ds2431_write_poll(ds2431_t *d)
+{
+    ow_status_t st = write_poll_raw(d);
+
+    if ((d != 0) && (st != OW_BUSY)) {
+        d->result = (uint8_t)st;
+    }
+    return st;
+}
+
+static ow_status_t write_poll_raw(ds2431_t *d)
 {
     if (d == 0) {
         return OW_PARAM;
@@ -434,6 +460,8 @@ ow_status_t ds2431_write_poll(ds2431_t *d)
 
     case PH_DONE:
     default:
-        return OW_OK;
+        /* Report the result the operation ended with; a second poll must not
+         * turn a failure into OW_OK. */
+        return (ow_status_t)d->result;
     }
 }

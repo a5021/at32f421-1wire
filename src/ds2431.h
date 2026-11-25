@@ -49,6 +49,7 @@ typedef struct {
     uint8_t *dst;
     const uint8_t *src;
     uint8_t  sp[13];
+    uint8_t  result;                /* status the last operation ended with */
 } ds2431_t;
 
 void ds2431_init(ds2431_t *d);

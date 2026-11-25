@@ -27,6 +27,9 @@ typedef enum {
  * returns something other than OW_BUSY.  No function blocks.
  */
 
+/* Every _start arms a hardware pass.  The caller must have checked
+ * ow_hal_busy() first: a start while a pass is in flight replaces it and the
+ * outstanding poll then reports the new pass. */
 void        ow_reset_start(void);
 ow_status_t ow_reset_poll(bool *presence);
 

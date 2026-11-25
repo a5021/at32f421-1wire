@@ -27,6 +27,7 @@ typedef struct {
     uint8_t  cmd[10];               /* command packet, expanded in chunks */
     uint8_t  cmd_len;
     int16_t  raw;
+    uint8_t  result;                /* status the last operation ended with */
 } ds18b20_t;
 
 void        ds18b20_init(ds18b20_t *d, bool parasite);

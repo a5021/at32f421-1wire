@@ -24,6 +24,12 @@ static uint8_t  roms[DEV_MAX][8];
 static uint32_t device_count;
 static uint32_t ds18b20_count;
 
+/* Search results are staged here and copied into roms[] only when the pass
+ * completes, so a failed rescan cannot leave a partial list published. */
+static uint8_t  roms_next[DEV_MAX][8];
+static uint32_t search_next_count;
+static uint32_t search_next_ds;
+
 static int16_t  temp_raw[DEV_MAX];
 static uint8_t  temp_status[DEV_MAX];
 static uint8_t  sp_sel[9];
@@ -412,8 +418,8 @@ static void manager_search(void)
 
     if (search_started == 0u) {
         ow_search_begin(&search);
-        device_count = 0;
-        ds18b20_count = 0;
+        search_next_count = 0;
+        search_next_ds = 0;
         search_error = 0;
         search_done = 0;
         search_started = 1;
@@ -426,18 +432,24 @@ static void manager_search(void)
         return;
     }
     if (st == OW_OK) {
-        if (device_count < DEV_MAX) {
-            memcpy(roms[device_count], search.rom, 8u);
+        if (search_next_count < DEV_MAX) {
+            memcpy(roms_next[search_next_count], search.rom, 8u);
             if (search.rom[0] == 0x28u) {
-                ds18b20_count++;
+                search_next_ds++;
             }
         }
-        device_count++;
+        search_next_count++;
         return;
     }
 
     search_started = 0;
     if (st == OW_END) {
+        /* Only a complete pass replaces the published list: a failed rescan
+         * leaves the last known-good devices in place instead of publishing a
+         * truncated count over the old ROM map. */
+        memcpy(roms, roms_next, sizeof(roms));
+        device_count = search_next_count;
+        ds18b20_count = search_next_ds;
         search_done = 1;
         roms_dirty = 1;
     } else {
