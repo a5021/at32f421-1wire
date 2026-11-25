@@ -25,8 +25,8 @@ void test_manager_run(void)
     manager_command(1u);
     manager_poll();
 
-    TF_CHECK(g_regs[REG_FLAGS] & FLAG_BUSY);
-    TF_CHECK(!(g_regs[REG_FLAGS] & FLAG_SNAPSHOT));
+    TF_CHECK(manager_map()[REG_FLAGS] & FLAG_BUSY);
+    TF_CHECK(!(manager_map()[REG_FLAGS] & FLAG_SNAPSHOT));
 
     /* A command latched while the manager is busy must be ignored. */
     mock_reset();
@@ -37,11 +37,11 @@ void test_manager_run(void)
     manager_poll();
 
     /* Still converting: BUSY flag must not have been set by the command. */
-    TF_CHECK(!(g_regs[REG_FLAGS] & FLAG_BUSY));
+    TF_CHECK(!(manager_map()[REG_FLAGS] & FLAG_BUSY));
 
     /* The command is consumed: a second poll must not re-trigger it. */
     manager_poll();
-    TF_CHECK(!(g_regs[REG_FLAGS] & FLAG_BUSY));
+    TF_CHECK(!(manager_map()[REG_FLAGS] & FLAG_BUSY));
 
     /* Idle passes must search again, otherwise a sensor plugged in after boot
      * stays invisible until the host sends a manual rescan. */

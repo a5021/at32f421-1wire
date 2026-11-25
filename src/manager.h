@@ -109,6 +109,8 @@ uint8_t manager_state_reg(void);
 /* Publish-window diagnostics. */
 bool manager_publish_busy(void);
 uint8_t manager_crc_ffff_count(void);
+const uint8_t *manager_map(void);
+void manager_select(uint8_t idx);
 uint32_t manager_eep_start_max(void);
 uint32_t manager_eep_poll_max(void);
 

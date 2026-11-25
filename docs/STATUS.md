@@ -1,52 +1,59 @@
 # Status
 
-Updated: 2026-11-24
+Updated: 2026-11-25
 
 ## Decision
 
-Firmware is `e9ba176` plus three robustness fixes (periodic rescan, strong
+Firmware is `e9ba176` plus four robustness fixes (periodic rescan, strong
 pull-up release in the recovery paths, refused `start` no longer published as
-a fresh reading).  No timing or protocol change, so the I2C measurements below
-still apply.
+a fresh reading) and the P3 snapshot fix: the published map moved to a
+dedicated buffer that is never written by a build, so a read can no longer
+observe a half-committed register file.
 
-## Current numbers (e9ba176 + P1 fixes)
+## Current numbers (e9ba176 + P1 fixes + P3 snapshot)
 
 | setup | result |
 |-------|--------|
+| 400 kHz, `repeat 0x00 256 20000`, 9 devices, cycle running | 19992 and 19998 good, 1-6 rbad, 1-2 wbad, 0 invalid |
 | 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
-| 400 kHz, `stress 20000`, 9-device cable, cycle running | 20000 good, 0-25 retries per run, FAIL |
-| 400 kHz, `stress 20000`, one sensor, short wire, external power | 1/0/0 retries, 2 PASS of 3 |
 | 400 kHz, `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
+| 400 kHz, `stress 20000`, one sensor, short wire, external power | 1/0/0 retries, 2 PASS of 3 |
 | 400 kHz, `stress 20000`, PA10 floating (no 1-Wire devices) | 3/3 runs, 0 retries, PASS |
-| 400 kHz, `stress 20000`, 100 uF on the 3.3 V rail | 7/8/7 retries, FAIL |
-| 400 kHz, `stress 20000`, 1-Wire DMA priority lowered | 4/10/4 retries, FAIL |
-| 100 kHz, `stress 20000`, cycle running | 20000 good, 11 retries (6 nack, 5 tails), 517 s, FAIL |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
-| `run full` (400 kHz) | 55/55 passed, 190 s |
+| `run full` (400 kHz) | 52-53/55, 190 s; see Remaining |
 | host tests | 333 checks, 0 failures |
 
-## Nuance
-
-A single `reg` read taken exactly when the manager runs can still lose the MSB
-(seen once: 0xDA); the 50 000-read loop is clean because the pointer write and
-read follow each other.  This is the same 1.44 us window, not a new defect.
-
-`stress 20000` is clean on data (0 torn, 0 invalid, 0 errors) but fails the
-zero-tolerance verdict on retries, and every retry is a tail of 0xFF starting
-at a random offset (64, 120, 149): the slave stops handing over bytes, it is
-not a bit flip.  Retries happen only while the 1-Wire cycle runs: with `cmd 4`
-(pause) the same run is 20000/20000 with 0 retries at 400 kHz.  At 100 kHz the
-count rises to 11 and adds 6 nack on the single-byte reads around the 256-byte
-map read, so this is not the bus speed margin.  The manager state at a retry is
-`read` or `eeprom`, never `publish`, and the worst manager step stays 10 us.
-`run full` T36 soak shows the same signature: 2 retries, both at offset 64.
+Before P3 the same 400 kHz row was 146-191 retries per 20 000 reads.
 
 Measured with temporary instrumentation (since removed), 400 kHz, cycle on:
-- worst gap between `i2c_poll()` calls: 11 us against a 22.5 us byte budget;
+- worst gap between `i2c_poll()` calls: 11-12 us against a 22.5 us byte budget;
 - long frame stopped before byte 256: 0 occurrences while retries happened;
 - run-to-run spread on the same build: 0, 1, 4, 5, 11, 25 retries per 20000
   reads, so a single run proves nothing.
+
+### P3: what the 0xFF tails actually were
+
+A logic-analyser capture of SDA/SCL at 4 MHz over 529 map reads showed six
+frames whose first bytes were real and whose remainder, CRC field included, was
+0xFF, while the slave kept ACKing and the temperatures stayed valid.  Four of
+the six broke at byte 0x40, and the tester's own soak reported retries "both at
+offset 64" -- the boundary of the 64-byte commit chunk.  `publish()` committed
+the shadow map into `g_regs` in four chunks spread over four `manager_poll()`
+calls and the master read `g_regs` directly, so a read that overlapped a
+publish saw the new first chunk over the previous tail.
+
+Fix: three 256-byte buffers.  A publish builds into `map_build` and the swap to
+`map_live` is one pointer store; the buffer a running read may still hold is
+parked in `map_spare` and reused only two publishes later.  The read path
+latches `manager_map()` at the address match, so one transaction always serves
+one snapshot, and `REG_SEQ` changes only at the swap.  Host-owned bytes
+(`REG_SPEED`, `REG_CMD..REG_FAULT`) are still read from `g_regs`; a selection
+change invalidates the scratchpad immediately (`manager_select()`), because a
+stale copy of the previous sensor's scratchpad is a lie.
+
+Result: 146-191 retries per 20 000 reads became 1-6, and T21 is 0 torn over 400
+snapshot reads.
 
 With PA10 lifted off the board (1-Wire devices gone, cycle still running, map
 frozen with `TEMP_ERROR`) three stress runs in a row were 20000/20000 with 0
@@ -61,6 +68,17 @@ whole 750 ms conversion -- and it produced no retries, so the pull-up current
 is not the coupling.  The difference between 0-1 and 4-25 retries is the
 9-device cable.  A residual address-phase nack remains at roughly 1e-5 even
 on the short wire; zero tolerance at 400 kHz is probably not reachable.
+
+## Remaining
+
+- `run full` 52-53/55.  T28/T29/T55 test the selected scratchpad and need a
+  successful read of the newly selected sensor within two cycles; a failed read
+  leaves the published scratchpad at 0xFF by design.  T35 reports 9886-9896
+  good of 10 000 because a publish inside a read changes `REG_SEQ` and the
+  tester counts that as torn (threshold 9900).  T50 reports "magic 0x??"
+  because the deliberately corrupted write lands on the magic byte.
+- Residual transport errors: about 1 write and 1 read per 20 000, both on the
+  9-device cable.  The 1.44 us address-phase window is still the suspect.
 
 ## Next
 
@@ -109,4 +127,9 @@ e9ba176).
   publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
 - Manager steps inside the I2C burst: first-byte errors rose to 2%.
+- Transmit underrun (`OUF`) as the cause of the 0xFF tails: with the counter
+  added to `0x6C/0x6D`, the worst interval between `i2c_poll()` calls was 12 us
+  against a 22.5 us byte budget, and the capture of six truncated frames showed
+  no SCL stretching at all, so the slave was never late.  The tails were the
+  chunked commit into the live map (see P3 above).
 

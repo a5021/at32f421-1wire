@@ -63,6 +63,19 @@ uint8_t  g_regs[256] __attribute__((aligned(4)));
 volatile uint32_t g_i2c_speed = 0;
 static uint32_t roms_dirty = 1;
 
+/* Three buffers.  map_live is what the master reads and is never written; the
+ * build runs in map_build and the swap is one pointer store.  The buffer a
+ * read may still be holding is parked in map_spare and reused only two
+ * publishes later.  The 4 x 64-byte commit this replaces was visible to the
+ * master as a run of 0xFF from the chunk boundary onwards whenever a read
+ * overlapped it. */
+static uint8_t  map_a[256] __attribute__((aligned(4)));
+static uint8_t  map_b[256] __attribute__((aligned(4)));
+static uint8_t  map_c[256] __attribute__((aligned(4)));
+static uint8_t *map_live = map_a;
+static uint8_t *map_build = map_b;
+static uint8_t *map_spare = map_c;
+
 static uint16_t crc_table[256];
 static void crc_table_init(void);
 static void crc_skip_table_init(void);
@@ -117,6 +130,9 @@ void manager_init(void)
     crc_skip_table_init();
     g_regs[REG_MAGIC] = 0x5Au;
     g_regs[REG_VERSION] = 0x03u;
+    memset(map_a, 0, sizeof(map_a));
+    map_a[REG_MAGIC] = 0x5Au;
+    map_a[REG_VERSION] = 0x03u;
     ds18b20_init(&sensor, true);
     ds2431_init(&eeprom);
     clear_results();
@@ -159,7 +175,7 @@ static void crc_table_init(void)
     }
 }
 
-static uint8_t  shadow[256] __attribute__((aligned(4)));
+/* Build state for the snapshot in progress. */
 static uint8_t  pub_phase;
 static uint32_t pub_pos;
 static uint16_t pub_crc;
@@ -193,21 +209,6 @@ static void map_copy_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
     }
 }
 
-/* Commit chunk.  Byte-wise so the host-owned bytes REG_CMD..REG_FAULT are left
- * alone; skipping them also removes the save/restore pair that used to lose a
- * host write made in the middle of the copy. */
-static void map_commit_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
-{
-    uint32_t end = pos + 64u;
-
-    for (uint32_t i = pos; i < end; i++) {
-        if ((i >= REG_CMD) && (i <= REG_FAULT)) {
-            continue;
-        }
-        dst[i] = src[i];
-    }
-}
-
 static void crc_skip_table_init(void)
 {
     for (uint32_t i = 0u; i < 256u; i++) {
@@ -215,7 +216,7 @@ static void crc_skip_table_init(void)
     }
 }
 
-/* Build the next snapshot into the shadow buffer. */
+/* Build the next snapshot into the map_build buffer. */
 static void publish_fill(uint8_t *dst)
 {
     uint8_t flags = FLAG_SNAPSHOT | FLAG_SEARCH_DONE;
@@ -256,6 +257,11 @@ static void publish_fill(uint8_t *dst)
     memcpy((void *)&dst[REG_EEPROM], eeprom_data, 8u);
     dst[REG_EEPROM_STATUS] = eeprom_status;
 
+    /* The host owns REG_SELECTED, so the snapshot carries the value that is
+     * current at build time: the scratchpad below must match what the master
+     * reads back from REG_SELECTED itself. */
+    dst[REG_SELECTED] = g_regs[REG_SELECTED];
+
     /* A selection outside the DS18B20 table must not expose a stale
      * scratchpad: publish the invalid marker instead. */
     if ((dst[REG_SELECTED] & 0x0Fu) >= ds18b20_count) {
@@ -285,10 +291,10 @@ static void publish_step(void){
 
     switch (pub_phase) {
     case 0u:
-        map_copy_chunk(shadow, (const uint8_t *)g_regs, pub_pos);
+        map_copy_chunk(map_build, map_live, pub_pos);
         pub_pos += 64u;
         if (pub_pos >= 256u) {
-            publish_fill(shadow);
+            publish_fill(map_build);
             pub_crc = 0xFFFFu;
             pub_pos = 0u;
             pub_phase = 1u;
@@ -306,12 +312,12 @@ static void publish_step(void){
                 continue;
             }
             pub_crc = (uint16_t)((uint16_t)(pub_crc << 8) ^
-                       crc_table[(uint8_t)((pub_crc >> 8) ^ shadow[i])]);
+                       crc_table[(uint8_t)((pub_crc >> 8) ^ map_build[i])]);
         }
         pub_pos = end;
         if (pub_pos >= 256u) {
-            shadow[REG_MAP_CRC_L] = (uint8_t)(pub_crc & 0xFFu);
-            shadow[REG_MAP_CRC_H] = (uint8_t)(pub_crc >> 8);
+            map_build[REG_MAP_CRC_L] = (uint8_t)(pub_crc & 0xFFu);
+            map_build[REG_MAP_CRC_H] = (uint8_t)(pub_crc >> 8);
             pub_pos = 0u;
             pub_phase = 2u;
         }
@@ -319,31 +325,33 @@ static void publish_step(void){
     }
 
     default:
-        if ((g_regs[REG_SELECTED] & 0x0Fu) != shadow[REG_SELECTED]) {
-            /* A selection change restarts the build.  Checked before every
-             * chunk because the window is now four calls wide. */
+        if ((g_regs[REG_SELECTED] & 0x0Fu) != map_build[REG_SELECTED]) {
+            /* A selection change restarts the build. */
             pub_phase = 0u;
             pub_pos = 0u;
             break;
         }
-        if (pub_pos == 0u) {
-            if (pub_crc == 0xFFFFu) {
-                if (diag_crc_ffff != 0xFFu) {
-                    diag_crc_ffff++;
-                }
+        if (pub_crc == 0xFFFFu) {
+            if (diag_crc_ffff != 0xFFu) {
+                diag_crc_ffff++;
             }
-            g_regs[REG_SEQ] = ++pub_seq;    /* odd: update in progress */
         }
-        map_commit_chunk((uint8_t *)g_regs, (const uint8_t *)shadow, pub_pos);
-        pub_pos += 64u;
-        if (pub_pos >= 256u) {
-            cycle = cycle_next;
-            g_regs[REG_SEQ] = ++pub_seq;    /* even: snapshot stable */
-            pub_pos = 0u;
-            pub_phase = 0u;
-            manager_state = MGR_WAIT;
-            ow_delay_start(200000u);
+        /* Even SEQ: the snapshot is stable.  A publish is now a pointer swap,
+         * so there is no odd "update in progress" phase any more. */
+        pub_seq = (uint8_t)(pub_seq + 2u);
+        map_build[REG_SEQ] = pub_seq;
+        {
+            uint8_t *t = map_live;
+
+            map_live = map_build;   /* single store: readers see one map */
+            map_build = map_spare;
+            map_spare = t;          /* buffer a running read may still hold */
         }
+        cycle = cycle_next;
+        pub_pos = 0u;
+        pub_phase = 0u;
+        manager_state = MGR_WAIT;
+        ow_delay_start(200000u);
         break;
     }
 
@@ -371,6 +379,23 @@ uint8_t manager_crc_ffff_count(void)
     return diag_crc_ffff;
 }
 
+/* The map a read must serve.  Latched by the caller at the address match so a
+ * swap in the middle of a transaction cannot mix two snapshots. */
+const uint8_t *manager_map(void)
+{
+    return map_live;
+}
+
+/* The host owns the selection.  A change invalidates the scratchpad: what the
+ * map publishes must belong to the index the master reads back, and the
+ * previous sensor's scratchpad is a lie.  It becomes valid again when the
+ * manager reads the newly selected sensor. */
+void manager_select(uint8_t idx)
+{
+    g_regs[REG_SELECTED] = (uint8_t)(idx & 0x0Fu);
+    memset(sp_sel, 0xFF, sizeof(sp_sel));
+}
+
 uint32_t manager_eep_start_max(void)
 {
     return eep_start_max;
@@ -392,7 +417,7 @@ static void manager_search(void)
         search_error = 0;
         search_done = 0;
         search_started = 1;
-        g_regs[REG_FLAGS] |= FLAG_BUSY;
+        map_live[REG_FLAGS] |= FLAG_BUSY;
         return;
     }
 
@@ -446,13 +471,13 @@ void manager_poll(void)
             manager_state = MGR_SEARCH;
             search_started = 0;
             search_done = 0;
-            g_regs[REG_FLAGS] |= FLAG_BUSY;
+            map_live[REG_FLAGS] |= FLAG_BUSY;
             return;
         }
         if (cmd == 2u) {
             eeprom_started = 0;
             manager_state = MGR_EEPROM;
-            g_regs[REG_FLAGS] |= FLAG_BUSY;
+            map_live[REG_FLAGS] |= FLAG_BUSY;
             return;
         }
         if (cmd == 3u) {
@@ -625,11 +650,11 @@ void manager_poll(void)
             search_done = 0u;
             rescan_auto = 1u;       /* keep the last readings while searching */
             manager_state = MGR_SEARCH;
-            g_regs[REG_FLAGS] |= FLAG_BUSY;
+            map_live[REG_FLAGS] |= FLAG_BUSY;
             break;
         }
         manager_state = (ds18b20_count != 0u) ? MGR_CONVERT : MGR_EEPROM;
-        g_regs[REG_FLAGS] |= FLAG_BUSY;
+        map_live[REG_FLAGS] |= FLAG_BUSY;
         break;
 
     default:

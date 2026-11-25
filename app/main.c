@@ -41,6 +41,7 @@ extern uint32_t publish_crc_cycles;
 static uint32_t reg_ptr;
 static uint32_t rx_mode;
 static uint32_t tx_mode;
+static const uint8_t *tx_map;       /* map snapshot latched at the address match */
 static uint32_t first_byte;
 static int      pending_speed = -1;
 static uint8_t  pending_cmd;
@@ -84,6 +85,9 @@ static uint8_t  g_err_bus;          /* saturated BUSERR count */
 static volatile uint32_t max_cycles;/* worst manager_poll duration */
 static uint8_t  max_state;          /* state during that call */
 static uint32_t cycles_per_us = 120u;   /* measured at boot */
+static uint32_t i2c_gap_max;            /* worst cycles between i2c_poll calls */
+static uint32_t i2c_poll_last;          /* CYCCNT of the previous i2c_poll call */
+static uint16_t i2c_gap_latch;          /* last value handed to the host, us */
 
 static uint32_t g_ms;               /* 1 ms tick, polled from SysTick */
 static uint32_t g_scl_hz = 100000u; /* timing currently programmed */
@@ -202,9 +206,12 @@ static uint8_t reg_byte(uint32_t addr)
         return (uint8_t)((us > 255u) ? 255u : us);
     }
     case REG_DIAG_CRC_FFFF:
-        return manager_crc_ffff_count();
+        /* Diagnostic build: worst interval between i2c_poll() calls, us. */
+        i2c_gap_latch = (uint16_t)((i2c_gap_max / cycles_per_us) > 0xFFFFu
+                                   ? 0xFFFFu : (i2c_gap_max / cycles_per_us));
+        return (uint8_t)(i2c_gap_latch & 0xFFu);
     case REG_DIAG_BUSY:
-        return diag_recoveries;
+        return (uint8_t)(i2c_gap_latch >> 8);
     case REG_DIAG_ACK:
         return diag_ack;
     case REG_DIAG_REASON:
@@ -234,7 +241,12 @@ static uint8_t reg_byte(uint32_t addr)
         return (uint8_t)((us > 255u) ? 255u : us);
     }
     default:
-        return g_regs[addr & 0xFFu];
+        if ((addr == REG_SPEED) ||
+            ((addr >= REG_CMD) && (addr <= REG_FAULT))) {
+            /* Host-owned bytes: written by the master, never by a publish. */
+            return g_regs[addr & 0xFFu];
+        }
+        return tx_map[addr & 0xFFu];
     }
 }
 
@@ -258,6 +270,8 @@ static void health_clear(void)
     fault_edges = 0u;
     stall_armed = 0u;
     tx_index = 0u;
+    i2c_gap_max = 0u;
+    i2c_poll_last = DWT->CYCCNT;
 }
 
 static void fault_apply(uint8_t code)
@@ -551,8 +565,18 @@ static void i2c_stop_done(void){
 
 static void i2c_poll(void)
 {
-    uint32_t sts1 = I2C2->sts1;
-    uint32_t relevant = sts1 & ~STS1_TDBE;
+    uint32_t sts1;
+    uint32_t relevant;
+    uint32_t now = DWT->CYCCNT;
+    uint32_t gap = now - i2c_poll_last;
+
+    i2c_poll_last = now;
+    if (gap > i2c_gap_max) {
+        i2c_gap_max = gap;
+    }
+
+    sts1 = I2C2->sts1;
+    relevant = sts1 & ~STS1_TDBE;
 
     /* An underrun has to be handled before another byte is served, otherwise
      * the recorded position belongs to a later frame. */
@@ -607,6 +631,7 @@ static void i2c_poll(void)
             tx_mode = 1;
             rx_mode = 0;
             tx_index = 0u;
+            tx_map = manager_map();     /* one snapshot for the whole frame */
             i2c_send_byte();
         } else {
             rx_mode = 1;
@@ -646,7 +671,7 @@ static void i2c_poll(void)
                 g_regs[REG_CMD] = b;
                 pending_cmd = b;
             } else if (reg_ptr == REG_SELECTED) {
-                g_regs[REG_SELECTED] = b & 0x0Fu;
+                manager_select(b);
             } else if (reg_ptr == REG_FAULT) {
                 fault_apply(b);
             }
@@ -711,6 +736,9 @@ int main(void)
     i2c_hw_init();
 
     manager_init();
+
+    i2c_poll_last = DWT->CYCCNT;
+    tx_map = manager_map();
 
     for (;;) {
         timebase_poll();

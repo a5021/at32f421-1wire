@@ -32,7 +32,7 @@ Canonical description of the I2C slave register file exposed by
 | `0x63` | 2 | `REG_MAP_CRC` | CRC-16/CCITT over the snapshot, little-endian |
 | `0x65` | 1 | `REG_MGR` | Manager state, `0x80` set while paused (see below) |
 | `0x66..0x6B` | 6 | `REG_STALL*` | Worst and average publish-phase durations, microseconds |
-| `0x6C` | 1 | `REG_DIAG_CRC_FFFF` | Publishes whose map CRC came out `0xFFFF` |
+| `0x6C` | 2 | `REG_DIAG_GAP` | Diagnostic build only: worst interval between `i2c_poll()` calls, us, 16-bit LE. Normally `REG_DIAG_CRC_FFFF` |
 | `0x6D` | 1 | `REG_DIAG_BUSY` | SDA-stuck recoveries performed |
 | `0x6E` | 1 | `REG_DIAG_ACK` | ACK-failure count, modulo 256 |
 | `0x6F` | 1 | `REG_DIAG_REASON` | Transmit underruns (OUF), saturating |
