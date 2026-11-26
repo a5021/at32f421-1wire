@@ -296,7 +296,15 @@ void suite_map(void)
         if ((bad == 0) && (inc > 0)) {
             t_pass("%d increments", inc);
         } else {
-            t_fail("%d increments, %d bad", inc, bad);
+            /* The last value makes a silent slave (0xFFFF) distinguishable
+             * from a manager that simply is not publishing. */
+            uint8_t mgr = 0xFFu;
+            uint8_t fl = 0xFFu;
+
+            (void)bus_read_reg(REG_MGR, &mgr, 1u);
+            (void)bus_read_reg(REG_FLAGS, &fl, 1u);
+            t_fail("%d increments, %d bad, last %u, mgr 0x%02X flags 0x%02X",
+                   inc, bad, (unsigned)prev, mgr, fl);
         }
     }
 

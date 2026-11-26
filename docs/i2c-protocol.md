@@ -9,6 +9,12 @@ in `docs/register-map.md`.
 The I2C engine is polled (no interrupts) with clock stretching enabled. Every
 superloop iteration calls `i2c_poll()` then `manager_poll()`; neither blocks.
 
+Stretching is enabled by clearing `CTRL1.STRETCH` (bit 7): the bit is
+`NOSTRETCH`, as on STM32, so `1` disables stretching.  With `1` the slave
+cannot hold SCL while it loads the next byte, the first byte after the address
+comes back with bit 7 forced and a late byte turns into a transmit underrun --
+both were measured before the bit was fixed.
+
 ### Write (master → bridge)
 
 The master sends `[reg_addr, data_byte, ...]`. The first byte after the

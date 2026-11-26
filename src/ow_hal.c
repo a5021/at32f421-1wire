@@ -76,7 +76,10 @@ void ow_hal_init(void)
     /* PA10: idle high, open-drain first, then TMR1_CH3 (MUX 2). */
     GPIOA->odt |= OW_PIN_MASK;
     GPIOA->omode |= OW_PIN_MASK;
-    GPIOA->odrvr = (GPIOA->odrvr & ~(3u << OW_PIN_SHIFT)) | (1u << OW_PIN_SHIFT);
+    /* 0 = weakest drive.  The 1-Wire edges are what couples into the I2C pair,
+     * and at the strongest setting the crosstalk cost ~10 corrupted map reads
+     * per 3000; measured, not assumed. */
+    GPIOA->odrvr = (GPIOA->odrvr & ~(3u << OW_PIN_SHIFT));
     GPIOA->pull = (GPIOA->pull & ~(3u << OW_PIN_SHIFT)) | (1u << OW_PIN_SHIFT);
     GPIOA->muxh = (GPIOA->muxh & ~(0xFu << 8)) | (2u << 8);
     GPIOA->cfgr = (GPIOA->cfgr & ~(3u << OW_PIN_SHIFT)) | (2u << OW_PIN_SHIFT);

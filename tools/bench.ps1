@@ -93,7 +93,8 @@ $buf = New-Object System.Text.StringBuilder
 $sweepLines = 0
 while ((Get-Date) -lt $end) {
     Start-Sleep -Milliseconds 300
-    $c = $p.ReadExisting()
+    if (-not $p.IsOpen) { break }
+    try { $c = $p.ReadExisting() } catch { break }
     if (-not $c) { continue }
     [void]$buf.Append($c)
     $text = $buf.ToString()

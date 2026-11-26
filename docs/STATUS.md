@@ -1,30 +1,46 @@
 # Status
 
-Updated: 2026-11-25
+Updated: 2026-11-26
 
 ## Decision
 
-Firmware is `e9ba176` plus four robustness fixes (periodic rescan, strong
-pull-up release in the recovery paths, refused `start` no longer published as
-a fresh reading) and the P3 snapshot fix: the published map moved to a
-dedicated buffer that is never written by a build, so a read can no longer
-observe a half-committed register file.
+The root cause of every transport symptom was CTRL1 bit 7.  On this part the bit
+is NOSTRETCH, like STM32 `CR1.NOSTRETCH`: `0` holds SCL low until the slave has
+loaded DT, `1` lets the master clock the byte out at once.  The firmware wrote
+`1`, so clock stretching -- described as enabled in `i2c-protocol.md` and
+assumed in every latency budget -- was off.  The slave therefore could not hold
+the bus at the address match or between bytes: the first byte after the address
+came back with bit 7 forced (0x5A -> 0xDA) and a late byte became a transmit
+underrun (0xFF tails, `HEALTH_OUF` in every run).
 
-## Current numbers (e9ba176 + P1 fixes + P3 snapshot)
+With `stretch = 0` the same builds that failed now pass:
+
+| setup | before | after |
+|-------|--------|-------|
+| `run full` (400 kHz) | 53/55, T19/T28/T51/T55 failing | **55/55** |
+| `repeat 0x00 256 20000`, 9 devices, cycle running | 19992-19998 good, 1-6 rbad, 1-2 wbad | 19998 good, 0 rbad, 2 wbad |
+| `HEALTH_OUF` | set in every run | needs a fresh health read |
+
+Everything built on top of the missing stretch (chunked publish, the 12 us poll
+budget, the address-window theory) stays as it is -- it is correct and cheap --
+but it is no longer what keeps the bus alive.
+
+## Current numbers (400 kHz, 9 devices)
 
 | setup | result |
 |-------|--------|
-| 400 kHz, `repeat 0x00 256 20000`, 9 devices, cycle running | 19992 and 19998 good, 1-6 rbad, 1-2 wbad, 0 invalid |
-| 400 kHz, `repeat 0x00 1` 50 000 | 0 diff, 0 nack, 0 OUF |
-| 400 kHz, `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
-| 400 kHz, `stress 20000`, one sensor, short wire, external power | 1/0/0 retries, 2 PASS of 3 |
-| 400 kHz, `stress 20000`, PA10 floating (no 1-Wire devices) | 3/3 runs, 0 retries, PASS |
+| `run full` | 55/55, PASS |
+| `repeat 0x00 256 20000`, cycle running | 19998 good, 2 wbad, 0 rbad, 0 invalid |
+| `repeat 0x00 256 2000`, cycle running | 2000 good, 0 wbad, 0 rbad |
+| `stress 20000`, cycle paused (`cmd 4`) | 20000 good, 0 retries, PASS |
+| `stress 20000`, one sensor, short wire, external power | 1/0/0 retries, 2 PASS of 3 |
+| `stress 20000`, PA10 floating (no 1-Wire devices) | 3/3 runs, 0 retries, PASS |
 | 100 kHz, 1/2/8-byte blocks, 20 000 each | 0 diff |
 | 300 kHz, 1-byte, 20 000 | 0 diff |
-| `run full` (400 kHz) | 53/55, 190 s; see Remaining |
 | host tests | 337 checks, 0 failures |
 
-Before P3 the same 400 kHz row was 146-191 retries per 20 000 reads.
+The rows below the first two predate the stretch fix and were measured while
+NOSTRETCH was wrongly set.
 
 Measured with temporary instrumentation (since removed), 400 kHz, cycle on:
 - worst gap between `i2c_poll()` calls: 11-12 us against a 22.5 us byte budget;
@@ -69,19 +85,41 @@ is not the coupling.  The difference between 0-1 and 4-25 retries is the
 9-device cable.  A residual address-phase nack remains at roughly 1e-5 even
 on the short wire; zero tolerance at 400 kHz is probably not reachable.
 
+## Manager starvation (2026-11-26)
+The cycle counter froze for minutes at a time: `watch cycle` returned one value
+for the whole window, T22 reported "0 increments" and T42 "cycle not advancing".
+Nothing was wrong on the 1-Wire side.
+- Cause: `i2c_poll()` served `tx_mode && TDBE` before `STOPF`.  The NACK that
+  ends a read leaves ACKFAIL, TDBE and STOPF set at the same moment, so the
+  STOP was never retired; `tx_mode` stayed set and `i2c_active()` -- which also
+  trusted `STS2.busyf` -- kept `manager_poll()` from running at all.
+- Fix: `STOPF` and `ACKFAIL` are handled before `TDBE`; `i2c_active()` uses the
+  software frame view only (`STS2.busyf` stays set after a mangled frame,
+  measured); a frame still open after 100 ms is retired by `i2c_bus_recover()`
+  and counted in `REG_DIAG_CRC_FFFF`/`REG_DIAG_BUSY`.
+- Do not retire the frame on ACKFAIL alone: with stretching disabled this slave
+  samples the master's ACK late, and dropping `tx_mode` there releases SDA and
+  turns a healthy read into 0xFF.  Tested, reverted.
+- 1-Wire pad drive strength matters more than expected.  `odrvr = 1` (stronger)
+  cost 10-14 corrupted map reads per 3000; `odrvr = 0` (weakest) 4 per 5000.
+  The coupling is the 1-Wire edge, not the strong pull-up.
+| setup after the fix | result |
+|-------|--------|
+| `run full` | 54/55, T22 the only failure |
+| `stress 20000` | 20000 good, 98 torn, 0 invalid, 0 errors, 14 retries (12 validate, 2 transport) |
+| `stress 5000` | 5000 good, 22 torn, 0 invalid, 0 errors, 4 retries |
+| `stress 3000` at 100 kHz | 3000 good, 16 torn, 0 invalid, 0 errors, 3 retries |
+| cycle | advances 1/s under load, no freeze |
 ## Remaining
-
-- `run full` 53/55.  T28 and T55 fail identically on `ed3796c` and on the
-  review build, so they are pre-existing: both depend on the selected
-  scratchpad being refreshed within two cycles, and T55 asks for a sensor index
-  that is not a DS18B20.  T48 flaked once ("missed 0, wrong-address acks 0") and
-  passed on the next run.
-- Single-shot tests still catch the address window: `T19 speed readback 129`
-  (0x01|0x80) and `T51 first byte 83` (0x03|0x80) appear in some runs and pass
-  in others.  That is the 1.44 us ADDR window, not a data-path error: T35's full
-  map CRC is intact in every run (invalid 0, errors 0).
-- Residual transport errors: about 1 write and 1 read per 20 000, both on the
-  9-device cable.
+- T22 still fails, but for a different reason than the stall: the cycle sits at
+  2 while `REG_MGR` and `REG_FLAGS` read back 0xFF.  At the end of the map suite
+  the slave answers its address and drives nothing, which is the same all-FF
+  class as the residual stress retries, not a manager stall.  Outside the suite
+  `watch cycle` advances once per second.
+- The review has open items that are not transport errors: a normal read NACK
+  clears `pending_cmd`/`pending_speed` and drops both modes,
+  `i2c_apply_speed()` switches the peripheral off from the STOP path, and TRISE
+  is clamped to 63 at 100 kHz because the field is 6 bits wide.
 
 ## Next
 
@@ -158,9 +196,10 @@ e9ba176).
   publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
 - Manager steps inside the I2C burst: first-byte errors rose to 2%.
-- Transmit underrun (`OUF`) as the cause of the 0xFF tails: with the counter
-  added to `0x6C/0x6D`, the worst interval between `i2c_poll()` calls was 12 us
-  against a 22.5 us byte budget, and the capture of six truncated frames showed
-  no SCL stretching at all, so the slave was never late.  The tails were the
-  chunked commit into the live map (see P3 above).
+- Transmit underrun (`OUF`) as the cause of the 0xFF tails: this rejection was
+  wrong.  It rested on the poll gap (12 us of 22.5) and on "no SCL stretching,
+  so the slave was never late" -- the stretching was missing *because*
+  `CTRL1.stretch = 1` disables it, and the underrun was the real cause of the
+  tails.  See the Decision above; the chunked commit was a second, independent
+  defect that P3 removed.
 
