@@ -113,7 +113,7 @@ static bool     sda_low_seen;
  * b7 RDBF).  0x6F counts the events. */
 static uint8_t  diag_abort_cnt;
 static uint8_t  diag_abort_pos;     /* tx_index of the last aborted frame */
-static uint8_t  diag_abort_sts1;    /* STS1 at that moment */
+static uint8_t  saw_ackfail;        /* the current frame was NACKed */
 /* A software frame left open blocks manager_poll() by design, so a latch is
  * kept of every episode that outlived 50 ms, with what was pending there. */
 /* A write transaction is one or two bytes (register pointer, value).  More
@@ -233,13 +233,13 @@ static uint8_t reg_byte(uint32_t addr)
         return (uint8_t)((us > 255u) ? 255u : us);
     }
     case REG_DIAG_CRC_FFFF:
-        return diag_starve_cnt;
+        return diag_abort_cnt;
     case REG_DIAG_BUSY:
-        return diag_starve_bits;
+        return diag_abort_pos;
     case REG_DIAG_ACK:
         return diag_misdecode;
     case REG_DIAG_REASON:
-        return diag_abort_cnt;
+        return diag_ouf_count;
     case REG_MAX_STEP: {
         uint32_t us = max_cycles / cycles_per_us;
 
@@ -580,21 +580,16 @@ static void i2c_stop_done(void){
             diag_misdecode++;
         }
     }
-    if ((tx_mode != 0u) && (tx_index >= 8u) && (tx_index < 250u)) {
+    /* A STOP that arrives while a transmit is still running, and with no NACK
+     * before it, is the truncation signature: the master was still clocking
+     * data out, so the rest of its read becomes 0xFF. */
+    if ((tx_mode != 0u) && (saw_ackfail == 0u) && (tx_index > 4u)) {
         if (diag_abort_cnt != 0xFFu) {
             diag_abort_cnt++;
         }
         diag_abort_pos = (uint8_t)tx_index;
-        diag_abort_sts1 = (uint8_t)(
-            (((I2C2->sts1 & STS1_ADDR7F) != 0u) ? 0x01u : 0u) |
-            (((I2C2->sts1 & STS1_STOPF) != 0u) ? 0x02u : 0u) |
-            (((I2C2->sts1 & STS1_TDBE) != 0u) ? 0x04u : 0u) |
-            (((I2C2->sts1 & STS1_ACKFAIL) != 0u) ? 0x08u : 0u) |
-            (((I2C2->sts1 & STS1_BUSERR) != 0u) ? 0x10u : 0u) |
-            (((I2C2->sts1 & STS1_ARLOST) != 0u) ? 0x20u : 0u) |
-            (((I2C2->sts1 & STS1_OUF) != 0u) ? 0x40u : 0u) |
-            (((I2C2->sts1 & STS1_RDBF) != 0u) ? 0x80u : 0u));
     }
+    saw_ackfail = 0u;
     (void)I2C2->sts1;
     I2C2->ctrl1_bit.i2cen = 1;
     rx_mode = 0u;
@@ -677,11 +672,8 @@ static void i2c_poll(void)
          * truncation at arbitrary offsets, 229 FF bytes at the tail).  Only
          * the stopped-frame watchdog in the main loop retires a frame that is
          * really over. */
-        if ((tx_mode != 0u) && (tx_index >= 8u) && (tx_index < 250u)) {
-            if (diag_abort_cnt != 0xFFu) {
-                diag_abort_cnt++;
-            }
-            diag_abort_pos = (uint8_t)tx_index;
+        if (tx_mode != 0u) {
+            saw_ackfail = 1u;
         }
         g_i2c_err_ack++;
         diag_ack = (uint8_t)g_i2c_err_ack;
@@ -698,7 +690,15 @@ static void i2c_poll(void)
      * (measured: STS2.busyf and tx_mode stayed set, i2c_active() kept the
      * manager from ever being polled again, and the cycle counter froze). */
     if ((sts1 & STS1_STOPF) != 0u) {
-        i2c_stop_done();
+        /* A STOP means the master released the bus: SDA is high while SCL is
+         * high.  This slave has been seen to latch STOPF while the master was
+         * still clocking data out (a truncated map read, 0xFF from an arbitrary
+         * offset, always with no NACK before it), so the flag alone is not
+         * trusted while a transmit is in flight. */
+        if (((GPIOA->idt & (SDA_BIT | SCL_BIT)) == (SDA_BIT | SCL_BIT)) ||
+            (tx_mode == 0u)) {
+            i2c_stop_done();
+        }
         return;
     }
 
@@ -757,6 +757,7 @@ static void i2c_poll(void)
             tx_mode = 1;
             rx_mode = 0;
                     tx_index = 0u;
+            saw_ackfail = 0u;
             tx_map = manager_map();     /* one snapshot for the whole frame */
             i2c_send_byte();
         } else {

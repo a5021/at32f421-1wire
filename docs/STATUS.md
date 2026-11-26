@@ -106,10 +106,23 @@ Nothing was wrong on the 1-Wire side.
 | setup after the fix | result |
 |-------|--------|
 | `run full` | 54/55, T22 the only failure |
-| `stress 20000` | 20000 good, 98 torn, 0 invalid, 0 errors, 14 retries (12 validate, 2 transport) |
-| `stress 5000` | 5000 good, 22 torn, 0 invalid, 0 errors, 4 retries |
+| `stress 20000` | 20000 good, 99 torn, 0 invalid, 0 errors, 6 retries (6 validate, 0 transport) |
+| `stress 5000` | 5000 good, 23 torn, 0 invalid, 0 errors, 2 retries |
 | `stress 3000` at 100 kHz | 3000 good, 16 torn, 0 invalid, 0 errors, 3 retries |
 | cycle | advances 1/s under load, no freeze |
+
+The 0xFF tails were truncations, not bit errors: `retry diff` compares the failed
+map with a later clean read and shows the good bytes from some offset on
+(26, 64, 112, 128, 146, 154 ...), i.e. this slave released SDA in the middle of
+a live read.  A STOP is now trusted only when SDA and SCL are both actually
+high, and `REG_DIAG_CRC_FFFF` counts a STOP that cuts a live transmit with no
+NACK before it: that counter stayed 0 over the runs above, so the flag was not
+being raised early.  What is left is the byte-level class: this slave cannot
+stretch, so any CPU step longer than one bit time at 400 kHz (2.5 us) can lose
+the byte being shifted.  `manager_poll()` is measured at 8 us worst case, three
+bit times, which matches a residual of a few reads in 20 000 and cannot be
+closed without clock stretching or an I2C interrupt that the earlier session
+rejected.
 ## Remaining
 - T22 still fails, but for a different reason than the stall: the cycle sits at
   2 while `REG_MGR` and `REG_FLAGS` read back 0xFF.  At the end of the map suite

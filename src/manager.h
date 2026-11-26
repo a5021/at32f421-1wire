@@ -38,12 +38,10 @@ extern "C" {
 #define REG_STALL_STATE         0x67u   /* manager state of that call */
 #define REG_STALL_P2            0x68u   /* publish phase 2 max */
 #define REG_STALL_AVG           0x69u   /* publish phase 0/1/2 averages */
-#define REG_DIAG_CRC_FFFF       0x6Cu   /* frames left open over 100 ms */
-#define REG_DIAG_BUSY           0x6Du   /* bits of the last one: b7 busyf,
-                                         * b6 tx_mode, b5 rx_mode, b3..b0
-                                         * TDBE|STOPF|ADDR7F|ACKFAIL */
+#define REG_DIAG_CRC_FFFF       0x6Cu   /* STOPs that cut a live transmit in two */
+#define REG_DIAG_BUSY           0x6Du   /* tx_index of the last one */
 #define REG_DIAG_ACK            0x6Eu   /* reads decoded as writes (>8 bytes) */
-#define REG_DIAG_REASON         0x6Fu   /* frames aborted by a STOP mid-transmit */
+#define REG_DIAG_REASON         0x6Fu   /* transmit underruns (OUF) */
 #define REG_MAX_STEP            0x79u   /* worst manager_poll, us, 16-bit LE */
 #define REG_MAX_STEP_H          0x7Au
 #define REG_MAX_STATE           0x7Bu   /* manager state of that call */
