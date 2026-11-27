@@ -33,7 +33,10 @@ add_executable(i2c_tester
     src/suites_fault.c
 )
 
-target_include_directories(i2c_tester PRIVATE src)
+target_include_directories(i2c_tester PRIVATE
+    src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../src
+)
 
 if(NOT PICO_BOARD)
     set(PICO_BOARD pico)

@@ -186,9 +186,13 @@ ow_status_t ow_search_poll(ow_search_t *s)
         if (st == OW_BUSY) {
             return OW_BUSY;
         }
-        if ((st != OW_OK) || !presence) {
+        if (st != OW_OK) {
             s->phase = OS_FINISHED;
-            return OW_END;
+            return st;
+        }
+        if (!presence) {
+            s->phase = OS_FINISHED;
+            return s->found_any ? OW_NO_PRESENCE : OW_END;
         }
         {
             uint8_t cmd = OW_CMD_SEARCH_ROM;
@@ -290,6 +294,7 @@ ow_status_t ow_search_poll(ow_search_t *s)
             s->phase = OS_FINISHED;
             return OW_CRC_ERROR;
         }
+        s->found_any = 1u;
         s->last_discrepancy = (int8_t)s->last_zero;
         s->last_device = (s->last_zero == 0u);
         s->phase = s->last_device ? OS_FINISHED : OS_RESET_ARM;

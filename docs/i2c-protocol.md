@@ -27,12 +27,11 @@ address+W is the register pointer; subsequent bytes are written to consecutive
 registers (pointer auto-increments, wraps at 0xFF).
 
 Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`), `REG_SELECTED` (`0x61`) and
-`REG_FAULT` (`0x62`) are
-writable; writes to any other address are ignored and the pointer still
-advances. The value is **latched at STOP** and applied when the current
-transaction finishes — it is **not** applied immediately on the byte write. An
-aborted transfer (BUSERR/ARLOST/OUF) discards any latched command or
-speed change.
+`REG_FAULT` (`0x62`) are writable; writes to any other address are ignored and
+the pointer still advances. `REG_SELECTED` applies immediately. `REG_SPEED` and
+`REG_CMD` are latched at STOP and applied when the current transaction finishes.
+An aborted transfer (BUSERR/ARLOST/OUF) discards a latched command or speed
+change. `REG_FAULT` arms the next transaction.
 
 ### Read (master → bridge)
 

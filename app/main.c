@@ -34,9 +34,6 @@ static uint16_t max_step_latch;     /* us, latched so the two bytes agree */
 extern uint32_t pub_phase_sum[3];
 extern uint32_t pub_phase_cnt[3];
 
-extern uint32_t publish_all_cycles;
-extern uint32_t publish_crc_cycles;
-
 static uint32_t reg_ptr;
 static uint32_t rx_mode;
 static uint32_t tx_mode;

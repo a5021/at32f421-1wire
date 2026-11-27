@@ -60,6 +60,7 @@ typedef struct {
     uint8_t id_bit;
     uint8_t cmp_bit;
     uint8_t dir;
+    uint8_t found_any;          /* at least one valid ROM in this pass */
 } ow_search_t;
 
 void        ow_search_begin(ow_search_t *s);

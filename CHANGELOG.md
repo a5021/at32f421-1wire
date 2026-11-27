@@ -30,6 +30,15 @@
   the measurement cannot corrupt itself.
 
 ### Fixed
+- **Build:** CMake now includes `src/manager.c`; a clean out-of-tree firmware
+  build links successfully.
+- **1-Wire search:** loss of presence after at least one valid ROM returns
+  `OW_NO_PRESENCE`, not `OW_END`. A failed rescan keeps the last good ROM list
+  and publishes `FLAG_SEARCH_ERROR`; host regressions cover both search and
+  manager behavior.
+- **Tester:** register and flag constants now come from `src/manager.h` instead
+  of a duplicate header. `tools/check_regmap.py` checks the Python demo subset
+  during `make test`.
 - **Tester:** T51 no longer masks the MSB of the first byte. A masked compare
   hid exactly the defect this work was about.
 

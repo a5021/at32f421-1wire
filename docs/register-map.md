@@ -30,11 +30,11 @@ Canonical description of the I2C slave register file exposed by
 | `0x4C..0x4D` | 2 | `REG_DIAG_START/BUS` | STARTF/BUSERR observed while a software frame was open, once per frame |
 | `0x4E..0x5F` | 18 | — | Reserved, reads `0x00`, covered by map CRC |
 | `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters, `4` = pause, `5` = resume (writable) |
-| `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed (writable) |
+| `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed; applies immediately (writable) |
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
 | `0x63` | 2 | `REG_MAP_CRC` | CRC-16/CCITT over the snapshot, little-endian |
 | `0x65` | 1 | `REG_MGR` | Manager state, `0x80` set while paused (see below) |
-| `0x66..0x6B` | 6 | `REG_STALL*` | Worst and average publish-phase durations, microseconds |
+| `0x66..0x6B` | 6 | `REG_STALL*` | Publish-phase 0/1/2 maxima and averages, microseconds |
 | `0x6C` | 1 | `REG_DIAG_CRC_FFFF` | Long reads stopped before byte 250, saturating |
 | `0x6D` | 1 | `REG_DIAG_BUSY` | `tx_index` of the last early STOP |
 | `0x6E` | 1 | `REG_DIAG_ACK` | Reads decoded as writes (more than 8 received bytes), saturating |
@@ -161,9 +161,10 @@ guarantees the CRC matches.
 ## Writable registers
 
 Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`), `REG_SELECTED` (`0x61`) and
-`REG_FAULT` (`0x62`) accept writes. A write is latched at STOP and applied
-when the current transaction finishes; an aborted transfer
-(BUSERR/ARLOST/OUF) discards the pending command or speed change.
+`REG_FAULT` (`0x62`) accept writes. `REG_SELECTED` applies immediately.
+`REG_SPEED` and `REG_CMD` are latched at STOP and applied when the current
+transaction finishes; an aborted transfer (BUSERR/ARLOST/OUF) discards the
+pending command or speed change. `REG_FAULT` arms the next transaction.
 
 The health block is read-only. Its values are injected when a byte is
 handed to the master, because `publish()` rebuilds `g_regs` from scratch on

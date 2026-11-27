@@ -10,6 +10,7 @@ set(LDSCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/vendor/at32f421/AT32F421x8_FLASH.ld)
 add_executable(${PROJECT_NAME}
     src/ow_crc.c
     src/ow_hal.c
+    src/manager.c
     src/onewire.c
     src/ds18b20.c
     src/ds2431.c

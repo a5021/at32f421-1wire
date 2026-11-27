@@ -15,6 +15,10 @@
 #include "ds2431.h"
 #include "clock.h"
 #include "clock.h"
+#include "manager.h"
+#include "manager.h"
+#include "regmap.h"
+#include "regmap.h"
 
 void test_headers_run(void)
 {

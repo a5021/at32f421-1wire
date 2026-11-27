@@ -28,9 +28,9 @@ REG_SELECTED = 0x61
 REG_SCRATCH = 0x70
 REG_ROMS = 0x80
 
-# NOTE: these register constants must stay in sync with docs/register-map.md
-# and app/main.c (the REG_* defines). docs/register-map.md is the source of
-# truth; update it first, then this file and the C header.
+# These constants are checked against src/manager.h by tools/check_regmap.py
+# during `make test`. Keep the firmware header, this file and the register-map
+# documentation aligned.
 
 FLAG_SEARCH_DONE = 0x01
 FLAG_SEARCH_ERROR = 0x02

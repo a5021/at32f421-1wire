@@ -40,6 +40,7 @@ OBJS += $(BUILD)/startup_at32f421.o
 VPATH := src:app:vendor/at32f421
 
 HOST_CC := gcc
+PYTHON  ?= python
 HOST_SRCS := \
 	tests/run_tests.c \
 	tests/test.c \
@@ -60,7 +61,7 @@ HOST_SRCS := \
 	src/manager.c \
 	tests/test_manager.c
 HOST_CFLAGS := -std=c11 -O1 -g -Wall -Wextra -Wshadow -Wno-unused-parameter \
-               -Isrc -Itests -Itests/mock
+               -Isrc -Itests -Itests/mock -Itools/rp2040-tester/src
 
 # Flashing / debugging through CMSIS-DAP (WCH-Link) with pyOCD + Artery DFP.
 PYOCD        ?= pyocd
@@ -99,6 +100,7 @@ size: $(BUILD)/$(TARGET).elf
 
 test: $(BUILD)/test_all
 	$(BUILD)/test_all
+	$(PYTHON) tools/check_regmap.py
 
 $(BUILD)/test_all: $(HOST_SRCS) | $(BUILD)
 	$(HOST_CC) $(HOST_CFLAGS) $(HOST_SRCS) -o $@

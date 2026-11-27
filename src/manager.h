@@ -34,10 +34,10 @@ extern "C" {
 #define REG_MAP_CRC_L           0x63u
 #define REG_MAP_CRC_H           0x64u
 #define REG_MGR                 0x65u
-#define REG_STALL               0x66u   /* worst manager_poll duration, us */
-#define REG_STALL_STATE         0x67u   /* manager state of that call */
-#define REG_STALL_P2            0x68u   /* publish phase 2 max */
-#define REG_STALL_AVG           0x69u   /* publish phase 0/1/2 averages */
+#define REG_STALL               0x66u   /* publish phase 0 max, us */
+#define REG_STALL_STATE         0x67u   /* publish phase 1 max, us */
+#define REG_STALL_P2            0x68u   /* publish phase 2 max, us */
+#define REG_STALL_AVG           0x69u   /* publish phase 0/1/2 averages, us */
 #define REG_DIAG_CRC_FFFF       0x6Cu   /* long reads stopped before byte 250 */
 #define REG_DIAG_BUSY           0x6Du   /* tx_index of the last early STOP */
 #define REG_DIAG_ACK            0x6Eu   /* reads decoded as writes (>8 bytes) */

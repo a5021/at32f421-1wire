@@ -102,6 +102,44 @@ void test_search_run(void)
         TF_CHECK(!contains(&roms[0], n, (const uint8_t *)"\0\0\0\0\0\0\0\0"));
     }
 
+    /* Presence lost after one valid ROM must not look like normal end. */
+    mock_reset();
+    {
+        uint8_t a[8], b[8];
+        ow_status_t st;
+
+        make_rom(a, 0x28, 0x21, 0x22, 0x23, 0x24, 0x25);
+        make_rom(b, 0x28, 0x31, 0x32, 0x33, 0x34, 0x35);
+        (void)mock_add(MOCK_DS18B20, a);
+        (void)mock_add(MOCK_DS18B20, b);
+        ow_search_begin(&s);
+        n = 0;
+        {
+            int guard = 40000;
+
+            for (;;) {
+                st = ow_search_poll(&s);
+                if (st == OW_BUSY) {
+                    if (guard-- <= 0) {
+                        st = OW_BUS_ERROR;
+                        break;
+                    }
+                    continue;
+                }
+                if (st == OW_OK) {
+                    n++;
+                    if (n == 1) {
+                        mock_set_presence(false);
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+        TF_CHECK_EQ(1, n);
+        TF_CHECK_EQ(OW_NO_PRESENCE, st);
+    }
+
     /* No devices -> OW_END straight away. */
     mock_reset();
     n = enumerate(roms, 8, &last, 0);

@@ -23,12 +23,17 @@ continuous I2C polling and resumes when the bus is idle; measured cycle went
 | `stress 2000`, 400 kHz | 2000 good, 0 torn, 0 invalid, 0 errors, 0 retries |
 | `stress 1000`, 100 kHz | 1000 good, 0 torn, 0 invalid, 0 errors, 0 retries |
 | `repeat 0x00 256 2000`, 100 kHz | 2000 good, 0 wbad, 0 rbad |
-| host tests | 337 checks, 0 failures |
+| host tests | 347 checks, 0 failures; Python register-map check passes |
 
 Also fixed: `STS1` and `STS2` reads that clear `ADDR7F` are adjacent in the
 generated `-O2` assembly. Automatic SDA-stuck recovery and the 100 ms
 open-frame watchdog are removed in this diagnostic build. `REG_DIAG_START`
 (0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per open frame.
+
+Review follow-up: CMake now includes `manager.c`; a rescan that loses presence
+after finding a ROM returns `OW_NO_PRESENCE` and keeps the last good list;
+the tester includes the firmware register header, and `make test` checks the
+Python demo constants against it.
 
 ## Historical numbers before the I2C priority guard
 

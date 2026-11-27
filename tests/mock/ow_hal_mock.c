@@ -20,6 +20,8 @@ static mock_dev_t g_dev[MOCK_MAX_DEV];
 static int g_devs;
 
 static int  g_presence = -1;            /* -1 auto, 0 absent, 1 present */
+static int  g_presence_drop_reset = -1;  /* force absent on this reset number */
+static int  g_reset_count;
 static int  g_reset_caps = 2;
 static int  g_read_shortfall;
 static int  g_busy_each;
@@ -103,6 +105,8 @@ void mock_reset(void)
     memset(g_dev, 0, sizeof(g_dev));
     g_devs = 0;
     g_presence = -1;
+    g_presence_drop_reset = -1;
+    g_reset_count = 0;
     g_reset_caps = 2;
     g_read_shortfall = 0;
     g_busy_each = 0;
@@ -190,6 +194,11 @@ int mock_dev_count(void)
 void mock_set_presence(bool present)
 {
     g_presence = present ? 1 : 0;
+}
+
+void mock_set_presence_drop_at_reset(int reset_number)
+{
+    g_presence_drop_reset = reset_number;
 }
 
 void mock_set_reset_captures(int captures)
@@ -651,6 +660,11 @@ void ow_hal_reset(void)
         present = g_presence;
     } else {
         present = (g_devs > 0) ? 1 : 0;
+    }
+    g_reset_count++;
+    if ((g_presence_drop_reset > 0) &&
+        (g_reset_count >= g_presence_drop_reset)) {
+        present = 0;
     }
     g_reset_caps_now = present ? g_reset_caps : 0;
 

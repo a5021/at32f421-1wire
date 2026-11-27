@@ -71,6 +71,7 @@ int         mock_dev_count(void);
 
 /* Fault injection. */
 void mock_set_presence(bool present);
+void mock_set_presence_drop_at_reset(int reset_number);
 void mock_set_reset_captures(int captures);
 void mock_set_read_shortfall(int slots);
 void mock_set_busy_ticks(int polls_per_pass);
