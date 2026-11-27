@@ -33,6 +33,8 @@ SRCS := \
 	src/ds18b20.c \
 	src/ds2431.c \
 	src/clock.c \
+	app/i2c_hw.c \
+	app/i2c_slave.c \
 	app/main.c \
 	vendor/at32f421/system_at32f421.c
 
@@ -49,6 +51,8 @@ HOST_SRCS := \
 	tests/run_tests.c \
 	tests/test.c \
 	tests/mock/ow_hal_mock.c \
+	tests/mock/i2c_hw_mock.c \
+	tests/test_i2c_slave.c \
 	tests/test_crc.c \
 	tests/test_timing.c \
 	tests/test_encode.c \
@@ -58,6 +62,7 @@ HOST_SRCS := \
 	tests/test_ds2431.c \
 	tests/test_state.c \
 	tests/test_headers.c \
+	app/i2c_slave.c \
 	src/ow_crc.c \
 	src/onewire.c \
 	src/ds18b20.c \

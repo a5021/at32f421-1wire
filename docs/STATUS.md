@@ -15,15 +15,15 @@ transport rate.
 | setup | result |
 |-------|--------|
 | `run quick`, production watchdog build | 48/48 PASS |
-| `run quick`, `DIAG_BUILD=1` | 48/48 before the diagnostic-map bump |
-| `run full`, production | 56/56 PASS |
+| `run quick`, `DIAG_BUILD=1` | 48/48 PASS |
+| `run full`, production | 56/56 PASS from a fresh target reset |
 | `stress 1000`, 400 kHz, no guard | latest: 5 retries, 0 invalid/errors; three-run baseline 1/6/3 |
-| `stress 1000`, 100 kHz, no guard | latest: 3 retries, 0 invalid/errors |
+| `stress 1000`, 100 kHz, no guard | latest: 4 retries, 0 invalid/errors |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
 | hardware WDT timeout | PASS: suppressed reload caused reboot and `CRM_WDTRSTF` |
 | HardFault reset | PASS: production handler caused reboot and `CRM_SWRSTF` |
-| host tests | 369 checks, 0 failures; Python register-map check passes |
+| host tests | 441 checks, 0 failures; Python register-map check passes |
 | CMake | production and `DIAG_BUILD=ON` firmware builds link |
 
 Fixes in this build:
@@ -49,6 +49,13 @@ Fixes in this build:
   reset; `DIAG_BUILD=1` leaves the WDT off and preserves the debugger halt.
 - BUSERR/ARLOST/OUF now load a dummy `DT` byte and cycle `I2CEN` to release a
   possible hardware stretch immediately, instead of waiting for the watchdog.
+  BUSERR and ARLOST are serviced before `TDBE`/`RDBF`, so a broken frame cannot
+  clock or accept another byte.
+- The I2C slave state machine moved from `app/main.c` to `app/i2c_slave.c/h`
+  behind the `app/i2c_hw.c` register adapter. Host tests cover STOPF+ADDR7F
+  ordering, repeated START, early/final NACK, STOP gating, BUSERR/ARLOST/OUF
+  priority, register-write policy, deferred speed, latch abort, fault commit,
+  recovery and frame timeout.
 - Speed changes are latched at STOP but applied from the main loop after a
   50 us idle-high window, avoiding peripheral re-init races with the next START.
   The 100 kHz TRISE clamp is documented as a safe 6-bit field-width limit.
@@ -197,11 +204,15 @@ concurrency; the remaining retry is therefore treated as a PA10 coupling or
 in-flight pass overlap issue.
 
 ## Remaining
-- `stress 1000` at 400 kHz without a guard has 1-4 retries across runs. A pass
+- `stress 1000` at 400 kHz without a guard has 1-6 retries across runs. A pass
   already in flight when an unpredictable I2C master starts can still overlap
   PA10 with I2C.
 - The default 165 us 1-Wire slot remains an intentional DS18B20 timing
   deviation; the strict 120 us option is measured but raises I2C retries.
+- Starting `run full` immediately after an aborted full run can leave the
+  manager in `MGR_CONVERT` with `ow_active` set and the cycle counter frozen.
+  A target reset clears it; fresh-reset full runs pass. Trigger is not yet
+  isolated.
 
 ## Next
 

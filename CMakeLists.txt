@@ -15,6 +15,8 @@ add_executable(${PROJECT_NAME}
     src/ds18b20.c
     src/ds2431.c
     src/clock.c
+    app/i2c_hw.c
+    app/i2c_slave.c
     app/main.c
     vendor/at32f421/system_at32f421.c
     vendor/at32f421/startup_at32f421.s

@@ -10,6 +10,7 @@ void test_ds18b20_run(void);
 void test_ds2431_run(void);
 void test_state_run(void);
 void test_headers_run(void);
+void test_i2c_slave_run(void);
 void test_manager_run(void);
 
 #endif /* SUITES_H */

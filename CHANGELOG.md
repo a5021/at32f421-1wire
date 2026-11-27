@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Changed
+- **Bridge:** the polled I2C slave state machine moved to `app/i2c_slave.c/h`
+  behind the `app/i2c_hw.c` register adapter. BUSERR/ARLOST now abort before
+  `TDBE`/`RDBF`, preventing a broken frame from clocking another byte.
 - **Bridge:** register-map version is now `0x05`. Early NACK count/position
   diagnostics exclude normal final and short-read NACKs, and stress output
   includes GATE/START/BUS/early-NACK counters. `STRETCH` is programmed before
@@ -29,6 +32,9 @@
 - **1-Wire:** default 165 us slot is documented as an intentional deviation
   from the DS18B20 120 us maximum. `-DOW_T_GUARD=55` gives a strict 120 us slot;
   it passed full but raised I2C stress retries, so it is not the default.
+- **Tests:** I2C host coverage now exercises STOPF+ADDR7F order, repeated START,
+  NACK lifetime/position, STOP gating, error priority, write policy, deferred
+  speed, latch abort, fault commit, recovery and frame timeout (441 checks).
 - **Tests:** HAL request tests cover reset/read/write/wait slot counts and the
   DMA pulse terminator. STOPF trace verification covered 500 writes plus 500
   reads with correct STOP/NACK placement.

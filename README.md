@@ -129,7 +129,7 @@ Requires `arm-none-eabi-gcc` (newlib) and GNU make.
 
 ```sh
 make            # build/at32f421-1wire.elf + .hex + .bin
-make test       # host tests + Python register-map check (369 checks)
+make test       # host tests + Python register-map check (441 checks)
 make DIAG_BUILD=1   # diagnostic build: no automatic I2C recovery or hardware WDT
 make size
 ```

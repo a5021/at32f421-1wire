@@ -98,7 +98,7 @@ enum {
 };
 
 /* Shared register file, defined here but also visible to the I2C bridge
- * in app/main.c through this declaration. */
+ * in app/i2c_slave.c through this declaration. */
 extern uint8_t g_regs[256];
 
 /* Initial state for a cold start. */
