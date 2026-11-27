@@ -9,7 +9,10 @@
  *
  *   low1     write-1 low phase / read-slot init low phase
  *   low0     write-0 low phase
- *   guard    recovery time after every slot (parasite power needs the long one)
+ *   guard    recovery time after every slot. The default 100 us makes a
+ *            165 us slot, intentionally above the DS18B20 120 us maximum to
+ *            lower edge density on this wired multi-device harness. Builds
+ *            that require strict timing can use -DOW_T_GUARD=55 (120 us slot).
  */
 #ifndef OW_T_LOW1
 #define OW_T_LOW1               5u

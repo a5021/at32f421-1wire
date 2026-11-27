@@ -10,6 +10,15 @@
   open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics. Recovery
   now requires both SCL and SDA high and reports `HEALTH_RECOVERY_FAILED`
   otherwise; the SDA detector ignores frames waiting for data.
+- **Manager:** `map_copy_chunk()` uses per-word `memcpy` instead of aliased
+  `uint32_t *` casts. ARM output remains a word-copy loop; phase-0 max measured
+  4 us versus 6 us before.
+- **1-Wire:** default 165 us slot is documented as an intentional deviation
+  from the DS18B20 120 us maximum. `-DOW_T_GUARD=55` gives a strict 120 us slot;
+  it passed full but raised I2C stress retries, so it is not the default.
+- **Tests:** HAL request tests cover reset/read/write/wait slot counts and the
+  DMA pulse terminator. STOPF trace verification covered 500 writes plus 500
+  reads with correct STOP/NACK placement.
 - **Bridge:** I2C quiet-guard experiments were removed. They made short stress
   runs clean but broke manager concurrency (`run quick` 32-34/48); the no-guard
   baseline is 48/48 after widening T22 to a 5 s observation window.

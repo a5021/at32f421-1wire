@@ -209,11 +209,11 @@ static bool crc_skip(uint32_t i)
  * service budget at 400 kHz. */
 static void map_copy_chunk(uint8_t *dst, const uint8_t *src, uint32_t pos)
 {
-    uint32_t *d = (uint32_t *)(void *)(dst + pos);
-    const uint32_t *s = (const uint32_t *)(const void *)(src + pos);
-
     for (uint32_t i = 0u; i < 16u; i++) {
-        d[i] = s[i];
+        uint32_t word;
+
+        memcpy(&word, src + pos + 4u * i, sizeof(word));
+        memcpy(dst + pos + 4u * i, &word, sizeof(word));
     }
 }
 

@@ -17,11 +17,11 @@ transport rate.
 | `run quick`, production watchdog build | 48/48 PASS |
 | `run quick`, `DIAG_BUILD=1` | 48/48 PASS |
 | `run full`, production | 56/56 PASS |
-| `stress 1000`, 400 kHz, no guard | 1000 good, 5 torn, 0 invalid, 0 errors, 1 retry |
-| `stress 1000`, 100 kHz, no guard | 1000 good, 17 torn, 0 invalid, 0 errors, 0 retries |
+| `stress 1000`, 400 kHz, no guard | 1000 good, 4-5 torn, 0 invalid, 0 errors, 1-4 retries across runs |
+| `stress 1000`, 100 kHz, no guard | 1000 good, 17-18 torn, 0 invalid, 0 errors, 0-5 retries across runs |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
-| host tests | 354 checks, 0 failures; Python register-map check passes |
+| host tests | 369 checks, 0 failures; Python register-map check passes |
 | CMake | production and `DIAG_BUILD=ON` firmware builds link |
 
 Fixes in this build:
@@ -38,6 +38,17 @@ Fixes in this build:
   non-monotonic values.
 - `REG_DIAG_START` (0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per
   open frame.
+- `map_copy_chunk()` now uses per-word `memcpy`, removing strict-aliasing UB.
+  ARM code remains a word-copy loop; publish phase-0 max improved from 6 to
+  4 us on the bench.
+- STOPF hardware trace: 500 pointer writes plus 500 one-byte reads produced
+  exactly 1000 complete transactions with correct STOP/NACK placement. T07
+  repeated START, T08 0..50 us turnaround and T46 aborted-read cases pass.
+- The default 165 us 1-Wire slot is documented as an intentional DS18B20
+  timing deviation. A strict 120 us build (`OW_T_GUARD=55`) passed full but
+  increased I2C stress retries, so it remains an opt-in variant.
+- Host HAL tests now check reset/read/write/wait requests, exact slot counts
+  and the DMA pulse terminator.
 
 The remaining transport retry correlates with PA10 edge activity. No software
 guard is retained because it trades transport errors for a non-functional
@@ -244,6 +255,11 @@ e9ba176).
   OUF stayed zero in the captured failures and clock stretching is enabled.
   The earlier missing-stretch defect was real, but it is separate from the
   PA10-overlap failures.
+- DS18B20 120 us slot variant (`OW_T_GUARD=55`): full suite passed 56/56, but
+  short stress retries rose from 1 to 8 per 1000 at 400 kHz and from 0 to 4 per
+  1000 at 100 kHz. Reverted to the measured 165 us default; the strict variant
+  remains available as a compile-time override and the deviation is documented
+  in `ow_config.h`.
 - I2C quiet guard (1 ms, 50 us, low-level and operation-level variants):
   rejected. It made short stress runs clean but reduced `run quick` to
   32-34/48 by blocking or corrupting manager operations. Guard=0 baseline is

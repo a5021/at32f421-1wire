@@ -137,6 +137,42 @@ void test_bus_run(void)
         TF_CHECK(!ow_read_start(OW_MAX_BYTES + 1u));
     }
 
+    /* HAL request configuration: reset, read, write and delay must program
+     * the slot counts and pulse terminator consumed by TMR1/DMA. */
+    {
+        static const uint8_t tx[2] = { 0xA5, 0x3Cu };
+        const mock_event_t *events;
+
+        mock_reset();
+        ow_reset_start();
+        events = mock_events();
+        TF_CHECK_EQ(1, mock_event_count());
+        TF_CHECK_EQ(MOCK_EV_RESET, events[0].kind);
+
+        mock_reset();
+        TF_CHECK(ow_read_start(9u));
+        events = mock_events();
+        TF_CHECK_EQ(1, mock_event_count());
+        TF_CHECK_EQ(MOCK_EV_READ, events[0].kind);
+        TF_CHECK_EQ(72u, events[0].a);
+
+        mock_reset();
+        TF_CHECK(ow_write_start(tx, 2u));
+        events = mock_events();
+        TF_CHECK_EQ(1, mock_event_count());
+        TF_CHECK_EQ(MOCK_EV_FEED, events[0].kind);
+        TF_CHECK_EQ(16u, events[0].a);
+        TF_CHECK_EQ(OW_T_LOW1, mock_last_pulses()[0]);
+        TF_CHECK_EQ(0u, mock_last_pulses()[16]);
+
+        mock_reset();
+        ow_delay_start(750000u);
+        events = mock_events();
+        TF_CHECK_EQ(1, mock_event_count());
+        TF_CHECK_EQ(MOCK_EV_WAIT, events[0].kind);
+        TF_CHECK_EQ(750000u, events[0].a);
+    }
+
     /* A full-size 32-byte read. */
     {
         uint8_t dst[OW_MAX_BYTES];
