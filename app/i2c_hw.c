@@ -147,10 +147,14 @@ static void spin_us(uint32_t us)
 /* Nine clocks and a STOP free a slave left mid-byte. The caller must prove
  * the master stopped talking: either no address arrived for the open-frame
  * timeout, or SDA has been stuck low with SCL high for STUCK_MS. */
-bool i2c_hw_recover(uint32_t scl_hz)
+i2c_recovery_result_t i2c_hw_recover(uint32_t scl_hz, bool allow_low_scl)
 {
     bool scl_ok = true;
     bool recovered;
+
+    if (!allow_low_scl && ((GPIOA->idt & SCL_BIT) == 0u)) {
+        return I2C_RECOVERY_DEFERRED;
+    }
 
     I2C2->ctrl1_bit.i2cen = 0;
     GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000005u;
@@ -185,7 +189,7 @@ bool i2c_hw_recover(uint32_t scl_hz)
 
     recovered = scl_ok &&
                 ((GPIOA->idt & (SDA_BIT | SCL_BIT)) == (SDA_BIT | SCL_BIT));
-    return recovered;
+    return recovered ? I2C_RECOVERY_OK : I2C_RECOVERY_FAILED;
 }
 
 void i2c_hw_delay_us(uint32_t us)

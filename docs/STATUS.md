@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-11-27
+Updated: 2026-11-28
 
 ## Current build (register map 0x05)
 
@@ -14,16 +14,17 @@ transport rate.
 
 | setup | result |
 |-------|--------|
-| `run quick`, production watchdog build | 48/48 PASS |
-| `run quick`, `DIAG_BUILD=1` | 48/48 PASS |
-| `run full`, production | 56/56 PASS from a fresh target reset |
-| `stress 1000`, 400 kHz, no guard | latest: 5 retries, 0 invalid/errors; three-run baseline 1/6/3 |
-| `stress 1000`, 100 kHz, no guard | latest: 4 retries, 0 invalid/errors |
+| `run quick`, production watchdog build | 49/49 PASS |
+| `run quick`, `DIAG_BUILD=1` | 49/49 PASS |
+| `run full`, production | 57/57 PASS from a fresh target reset |
+| `stress 1000`, 400 kHz, no guard | latest: 4 retries, 0 invalid/errors; three-run baseline 1/6/3 |
+| `stress 1000`, 100 kHz, no guard | latest: 1 retry, 0 invalid/errors |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
+| T46 slow master pause | PASS: no recovery during a 1200 ms SCL-low write pause |
 | hardware WDT timeout | PASS: suppressed reload caused reboot and `CRM_WDTRSTF` |
 | HardFault reset | PASS: production handler caused reboot and `CRM_SWRSTF` |
-| host tests | 441 checks, 0 failures; Python register-map check passes |
+| host tests | 451 checks, 0 failures; Python register-map check passes |
 | CMake | production and `DIAG_BUILD=ON` firmware builds link |
 
 Fixes in this build:
@@ -40,10 +41,13 @@ Fixes in this build:
   one additional failure class remains.
 - `REG_SELECTED` is latched at STOP with command/speed changes; the latch helper
   and `BRIDGE_MAP_VERSION` have host coverage.
-- Production builds restore SDA-stuck recovery and a 250 ms open-frame
-  watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy. Recovery
-  reports `HEALTH_RECOVERED` only when SCL and SDA both finish high, otherwise
-  `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting for data.
+- Production builds restore SDA-stuck recovery and a 1 s open-frame watchdog.
+  `DIAG_BUILD=1` disables both; T46 accepts either policy. The watchdog defers
+  on a new START/address, on SDA-low START/STOP-like states, and when SCL is low
+  without an owed `TDBE`/`RDBF` byte. It also requires a 10 ms unchanged quiet
+  window so STOPF can win a GPIO-idle race. Recovery reports `HEALTH_RECOVERED` only when SCL and SDA both finish high,
+  otherwise `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting
+  for data. T46 verifies a 1200 ms live-master pause causes no recovery.
 - Production also enables the independent WDT with a nominal 4 s timeout and
   reloads it once per main-loop pass. `HardFault_Handler` requests a system
   reset; `DIAG_BUILD=1` leaves the WDT off and preserves the debugger halt.
@@ -300,9 +304,9 @@ e9ba176).
   32-34/48 by blocking or corrupting manager operations. Guard=0 baseline is
   48/48 after widening the T22 observation window, with 1 retry per 1000 stress
   reads at 400 kHz.
-- 250 ms open-frame watchdog: restored for production using time since the last
-  address match, so it does not cut a legal transfer. `DIAG_BUILD=1` disables
-  it together with SDA-stuck recovery.
+- 250 ms open-frame watchdog: the earlier production value could disturb a live
+  slow master. Current production uses 1 s plus START/address and SCL/owed-byte
+  preflight checks; `DIAG_BUILD=1` disables both mechanisms.
 - Early BUSERR clear without frame teardown: did not remove CRC failures in
   short `couple` runs. Reverted to the normal handler order.
 - "The residual errors happen because this slave cannot stretch": wrong. The

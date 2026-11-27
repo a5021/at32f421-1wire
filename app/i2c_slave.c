@@ -21,7 +21,8 @@
 
 #define STUCK_MS                10u
 #define RECOVERY_RETRY_MS       100u
-#define BUS_FRAME_TIMEOUT_MS    250u
+#define RECOVERY_CONFIRM_MS     10u
+#define BUS_FRAME_TIMEOUT_MS    1000u
 
 volatile uint32_t g_i2c_err_bus;
 volatile uint32_t g_i2c_err_arl;
@@ -46,6 +47,8 @@ static uint32_t last_frame_ms;
 static uint32_t sda_low_since;
 static uint32_t last_recovery_ms;
 static bool     sda_low_seen;
+static bool     recovery_candidate;
+static uint32_t recovery_candidate_ms;
 
 static uint32_t reg_ptr;
 static uint32_t rx_mode;
@@ -649,14 +652,59 @@ void i2c_slave_health_poll(uint32_t now_ms)
     i2c_slave_recover(now_ms);
 }
 
-bool i2c_slave_frame_timed_out(uint32_t now_ms)
+static bool frame_owes_byte(uint32_t sts1)
 {
-    return i2c_slave_busy() && ((now_ms - last_frame_ms) > BUS_FRAME_TIMEOUT_MS);
+    return ((tx_mode != 0u) && ((sts1 & STS1_TDBE) != 0u)) ||
+           ((rx_mode != 0u) && ((sts1 & STS1_RDBF) != 0u));
+}
+
+bool i2c_slave_recovery_due(uint32_t now_ms)
+{
+    uint32_t sts1;
+    uint32_t gpio;
+
+    if (!i2c_slave_busy() || ((now_ms - last_frame_ms) <= BUS_FRAME_TIMEOUT_MS)) {
+        recovery_candidate = false;
+        return false;
+    }
+    sts1 = i2c_hw_sts1();
+    if ((sts1 & (STS1_STARTF | STS1_ADDR7F)) != 0u) {
+        recovery_candidate = false;
+        return false;
+    }
+    gpio = i2c_hw_gpio_idt();
+    /* SDA low with SCL high can be a live START/STOP or the dedicated
+     * SDA-stuck case. Do not race it with open-frame recovery. */
+    if ((gpio & SDA_BIT) == 0u) {
+        recovery_candidate = false;
+        return false;
+    }
+    /* A low SCL with no byte owed belongs to a master that may still be
+     * clocking or paused. Only a hardware-stretched slave may recover it. */
+    if (((gpio & SCL_BIT) == 0u) && !frame_owes_byte(sts1)) {
+        recovery_candidate = false;
+        return false;
+    }
+    /* GPIO can go idle before STOPF reaches the peripheral. Require a short
+     * unchanged quiet window so the normal STOP/ADDR handler wins the race. */
+    if (!recovery_candidate) {
+        recovery_candidate = true;
+        recovery_candidate_ms = now_ms;
+        return false;
+    }
+    return (now_ms - recovery_candidate_ms) >= RECOVERY_CONFIRM_MS;
 }
 
 void i2c_slave_recover(uint32_t now_ms)
 {
-    bool recovered = i2c_hw_recover(g_scl_hz);
+    uint32_t sts1 = i2c_hw_sts1();
+    i2c_recovery_result_t result =
+        i2c_hw_recover(g_scl_hz, frame_owes_byte(sts1));
+
+    if (result == I2C_RECOVERY_DEFERRED) {
+        return;
+    }
+    recovery_candidate = false;
 
     reg_ptr = 0u;
     rx_mode = 0u;
@@ -683,7 +731,7 @@ void i2c_slave_recover(uint32_t now_ms)
     last_recovery_ms = now_ms;
     last_frame_ms = now_ms;
 
-    if (recovered) {
+    if (result == I2C_RECOVERY_OK) {
         g_health |= HEALTH_RECOVERED;
     } else {
         g_health |= HEALTH_RECOVERY_FAILED;
@@ -723,4 +771,6 @@ void i2c_slave_init(void)
     sda_low_since = 0u;
     last_recovery_ms = 0u;
     sda_low_seen = false;
+    recovery_candidate = false;
+    recovery_candidate_ms = 0u;
 }

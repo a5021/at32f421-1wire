@@ -52,6 +52,7 @@ bool     bus_fault(uint8_t code);
 bool     bus_bb_corrupt_addr(uint8_t addr7, int flip_bit);
 bool     bus_bb_truncate(uint8_t addr7, uint8_t reg, int data_bits);
 bool     bus_bb_abort_read(uint8_t addr7, uint8_t reg, int data_bits);
+bool     bus_bb_pause_write(uint8_t addr7, uint8_t reg, uint32_t pause_ms);
 bool     bus_bb_corrupt_write(uint8_t addr7, uint8_t reg, uint8_t value,
                               int flip_bit);
 void     bus_bb_extra_clock(void);

@@ -467,7 +467,7 @@ void suite_map(void)
         sleep_ms(10u);
 
         bool ack = bus_bb_abort_read(BRIDGE_ADDR, REG_MAGIC, 4);
-        sleep_ms(400u);
+        sleep_ms(1200u);
 
         uint8_t seen = 0u;
 
@@ -484,6 +484,31 @@ void suite_map(void)
             t_pass("watchdog recovered, flags 0x%02X", seen);
         } else {
             t_pass("no watchdog, next address reset the frame");
+        }
+    }
+
+    t_start("T46", "slow master pause");
+    {
+        (void)send_cmd(CMD_CLEAR_COUNTERS);
+        sleep_ms(10u);
+
+        bool ack = bus_bb_pause_write(BRIDGE_ADDR, REG_MAGIC, 1200u);
+        uint8_t seen = 0u;
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (bus_health_sample()) {
+                seen |= bus_health_flags;
+            }
+        }
+        if (!ack) {
+            t_fail("paused write was not acknowledged");
+        } else if ((seen & (HEALTH_SDA_STUCK | HEALTH_RECOVERED |
+                            HEALTH_RECOVERY_FAILED)) != 0u) {
+            t_fail("recovery disturbed slow master, flags 0x%02X", seen);
+        } else if (!bus_probe(BRIDGE_ADDR)) {
+            t_fail("target did not respond after slow pause, flags 0x%02X", seen);
+        } else {
+            t_pass("no recovery during 1200 ms master pause, flags 0x%02X", seen);
         }
     }
 

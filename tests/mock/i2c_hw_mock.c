@@ -152,15 +152,18 @@ bool i2c_hw_busy(void)
     return (i2c_mock_sts2 & MOCK_BUSYF) != 0u;
 }
 
-bool i2c_hw_recover(uint32_t scl_hz)
+i2c_recovery_result_t i2c_hw_recover(uint32_t scl_hz, bool allow_low_scl)
 {
+    if (!allow_low_scl && ((i2c_mock_gpio & 0x00000001u) == 0u)) {
+        return I2C_RECOVERY_DEFERRED;
+    }
     record(MOCK_EVT_RECOVER, scl_hz, 0u);
     i2c_mock_sts1 = 0u;
     i2c_mock_sts2 = 0u;
     if (i2c_mock_recover_result) {
         i2c_mock_gpio = 0x00000003u;
     }
-    return i2c_mock_recover_result;
+    return i2c_mock_recover_result ? I2C_RECOVERY_OK : I2C_RECOVERY_FAILED;
 }
 
 void i2c_hw_delay_us(uint32_t us)

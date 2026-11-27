@@ -121,7 +121,7 @@ int main(void)
 
             i2c_slave_note_manager_poll(duration, state);
 #ifndef DIAG_BUILD
-        } else if (i2c_slave_frame_timed_out(g_ms)) {
+        } else if (i2c_slave_recovery_due(g_ms)) {
             /* Master disappeared without STOP. Retire the stale software
              * frame even if SCL/SDA were left low. */
             i2c_slave_recover(g_ms);

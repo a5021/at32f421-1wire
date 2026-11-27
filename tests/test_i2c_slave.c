@@ -290,6 +290,14 @@ static void test_fault_commit(void)
 static void test_recovery_policy(void)
 {
     reset_all();
+    start_read();
+    i2c_hw_mock_set_status(0u, 0u, 0u);
+    i2c_slave_recover(300u);
+    TF_CHECK(i2c_slave_busy());
+    TF_CHECK_EQ(0u, i2c_hw_mock_count(MOCK_EVT_RECOVER));
+    TF_CHECK_EQ(0u, i2c_slave_reg_byte(REG_HEALTH));
+
+    reset_all();
     i2c_hw_mock_set_status(0u, 0u, 0x00000001u);
     i2c_slave_health_poll(110u);
     i2c_slave_health_poll(120u);
@@ -310,8 +318,20 @@ static void test_frame_timeout_and_stats(void)
     reset_all();
     i2c_slave_health_poll(0u);
     start_read();
-    TF_CHECK(!i2c_slave_frame_timed_out(250u));
-    TF_CHECK(i2c_slave_frame_timed_out(251u));
+    TF_CHECK(!i2c_slave_recovery_due(1000u));
+    TF_CHECK(!i2c_slave_recovery_due(1001u));
+    TF_CHECK(!i2c_slave_recovery_due(1010u));
+    TF_CHECK(i2c_slave_recovery_due(1011u));
+
+    i2c_hw_mock_set_status(0u, 0u, 0u);
+    TF_CHECK(!i2c_slave_recovery_due(1011u));
+    i2c_hw_mock_set_status(0u, 0u, 0x00000001u);
+    TF_CHECK(!i2c_slave_recovery_due(1011u));
+    i2c_hw_mock_set_status(STS1_TDBE, 0u, 0x00000002u);
+    TF_CHECK(!i2c_slave_recovery_due(1011u));
+    TF_CHECK(i2c_slave_recovery_due(1021u));
+    i2c_hw_mock_set_status(STS1_STARTF, 0u, 0x00000003u);
+    TF_CHECK(!i2c_slave_recovery_due(1021u));
 
     i2c_slave_note_manager_poll(1200u, 4u);
     i2c_slave_note_manager_poll(600u, 2u);

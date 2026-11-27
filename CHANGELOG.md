@@ -13,10 +13,12 @@
 - **Bridge:** `REG_SELECTED` is latched at
   STOP with command/speed changes, so an aborted write cannot change the active
   scratchpad selection.
-- **Bridge:** production builds restore SDA-stuck recovery and a 250 ms
-  open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics. Recovery
-  now requires both SCL and SDA high and reports `HEALTH_RECOVERY_FAILED`
-  otherwise; the SDA detector ignores frames waiting for data.
+- **Bridge:** production builds restore SDA-stuck recovery and a 1 s open-frame
+  watchdog. `DIAG_BUILD=1` disables both for diagnostics. The watchdog defers
+  on START/address, SDA-low START/STOP-like states and a master-held low SCL
+  without an owed byte, then requires a 10 ms unchanged quiet window. Recovery
+  requires both SCL and SDA high and reports `HEALTH_RECOVERY_FAILED` otherwise;
+  T46 verifies a 1200 ms slow-master pause causes no recovery.
 - **Bridge:** production enables an independent WDT with a nominal 4 s timeout,
   reloaded once per main-loop pass. HardFault requests a system reset;
   `DIAG_BUILD=1` keeps the WDT off and the fault handler halted for debugging.

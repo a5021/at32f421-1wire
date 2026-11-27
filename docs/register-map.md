@@ -104,13 +104,15 @@ the four bytes cannot tear and no seqlock is needed.
 pathological event, so the flag is enough and a rate would add nothing.
 
 The flags are sticky. Production builds enable SDA-stuck recovery and a
-250 ms open-frame watchdog. The SDA detector ignores frames where the slave is
+1 s open-frame watchdog. The SDA detector ignores frames where the slave is
 waiting for received data or still has queued transmit data, so a legal master
 pause between bytes is not treated as a fault. The watchdog uses the last
-address-match time and recovers even if the vanished master left SCL/SDA low.
-Recovery reports success only when all nine SCL pulses reached the pad and both
-lines finish high; otherwise `HEALTH_RECOVERY_FAILED` is set. `DIAG_BUILD=1`
-disables both mechanisms and leaves bits 3..5 clear.
+address-match time, defers on a new START/address or SDA-low START/STOP-like
+states, and does not clock a low SCL unless the slave owes a `TDBE`/`RDBF` byte.
+A 10 ms unchanged quiet window lets STOPF win a GPIO-idle race. Recovery reports
+success only when all nine SCL pulses reached the pad and both lines finish high;
+otherwise `HEALTH_RECOVERY_FAILED` is set. `DIAG_BUILD=1` disables both mechanisms
+and leaves bits 3..5 clear.
 
 `CMD_CLEAR_COUNTERS` clears the counters, the flags and `REG_FRAMES`.
 `CMD=4` pauses the manager and `CMD=5` resumes it; the pause takes effect in

@@ -629,6 +629,30 @@ bool bus_bb_abort_read(uint8_t addr7, uint8_t reg, int data_bits)
     return ack;
 }
 
+bool bus_bb_pause_write(uint8_t addr7, uint8_t reg, uint32_t pause_ms)
+{
+    bb_begin();
+    bus_txn++;
+    bb_start();
+    bool ack = bb_byte((uint8_t)(addr7 << 1));
+
+    if (ack) {
+        ack = bb_byte(reg);
+    }
+    if (ack) {
+        /* Leave a live write frame open with the master holding SCL low. The
+         * slave owes no byte, so its open-frame watchdog must defer. */
+        bb_scl(0);
+        bb_sda(1);
+        sleep_ms(pause_ms);
+    }
+    bb_stop();
+    i2c_init(I2C_INST, current_speed);
+    gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
+    return ack;
+}
+
 /* Write a register with one bit of the data byte flipped, so the slave sees a
  * valid frame carrying a corrupted value. */
 bool bus_bb_corrupt_write(uint8_t addr7, uint8_t reg, uint8_t value,
