@@ -15,7 +15,7 @@
 #define CMD_RESUME              5u
 #define CMD_STALL_RESET         7u
 
-#define BRIDGE_VERSION          3u
+#define BRIDGE_VERSION          BRIDGE_MAP_VERSION
 
 #define FAMILY_DS18B20          0x28u
 #define FAMILY_DS2431           0x2Du

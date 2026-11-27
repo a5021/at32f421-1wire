@@ -41,6 +41,8 @@ static const uint8_t *tx_map;       /* map snapshot latched at the address match
 static uint32_t first_byte;
 static int      pending_speed = -1;
 static uint8_t  pending_cmd;
+static uint8_t  pending_selected;
+static bool     selected_pending;
 
 /* One-shot fault injection, armed through REG_FAULT.  Used by the tester to
  * prove that a corrupted byte, a skipped byte or a miscounted frame is caught
@@ -82,14 +84,22 @@ static uint8_t  g_err_bus;          /* saturated BUSERR count */
 static volatile uint32_t max_cycles;/* worst manager_poll duration */
 static uint8_t  max_state;          /* state during that call */
 static uint32_t cycles_per_us = 120u;   /* measured at boot */
-static uint32_t last_i2c_cycles;        /* last observed I2C activity */
-#define I2C_MANAGER_GUARD_US     50u
 
 static uint32_t g_ms;               /* 1 ms tick, polled from SysTick */
 static uint32_t g_scl_hz = 100000u; /* timing currently programmed */
 
 #define SDA_BIT                 0x00000002u
 #define SCL_BIT                 0x00000001u
+
+#ifndef DIAG_BUILD
+static uint32_t last_frame_ms;
+static uint32_t sda_low_since;
+static uint32_t last_recovery_ms;
+static bool     sda_low_seen;
+#define STUCK_MS                10u
+#define RECOVERY_RETRY_MS       100u
+#define BUS_FRAME_TIMEOUT_MS    100u
+#endif
 
 /* Long-read STOP diagnostic: 0x6C counts STOPs before byte 250; 0x6D stores
  * the last tx_index. */
@@ -418,9 +428,103 @@ static void spin_us(uint32_t us)
     }
 }
 
-/* Nine clocks and a STOP free a slave that was left mid-byte.  Called only
- * after SDA has been idle-low for STUCK_MS with SCL high, so the master
- * cannot be talking: driving the pins here is safe. */
+#ifndef DIAG_BUILD
+/* Nine clocks and a STOP free a slave left mid-byte. The caller must prove
+ * the master stopped talking: either no address arrived for the open-frame
+ * timeout, or SDA has been stuck low with SCL high for STUCK_MS. */
+static void i2c_bus_recover(void)
+{
+    I2C2->ctrl1_bit.i2cen = 0;
+    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000005u;
+    GPIOA->omode |= 0x00000003u;
+    GPIOA->odt |= (SDA_BIT | SCL_BIT);
+    spin_us(5u);
+
+    {
+        bool scl_ok = true;
+
+        for (int i = 0; i < 9; i++) {
+            GPIOA->odt &= ~SCL_BIT;
+            spin_us(5u);
+            GPIOA->odt |= SCL_BIT;
+            spin_us(5u);
+            if ((GPIOA->idt & SCL_BIT) == 0u) {
+                scl_ok = false;
+                break;
+            }
+        }
+        if (scl_ok) {
+            GPIOA->odt &= ~SDA_BIT;
+            spin_us(5u);
+            GPIOA->odt |= SCL_BIT;
+            spin_us(5u);
+            GPIOA->odt |= SDA_BIT;
+            spin_us(5u);
+        }
+    }
+
+    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x0000000Au;
+    GPIOA->omode |= 0x00000003u;
+    i2c_hw_init();
+
+    reg_ptr = 0u;
+    rx_mode = 0u;
+    tx_mode = 0u;
+    first_byte = 0u;
+    pending_cmd = 0u;
+    pending_speed = -1;
+    selected_pending = false;
+    fault_next = 0u;
+    fault_pending = 0u;
+    fault_drop_frame = 0u;
+    fault_current = 0u;
+    if (forced_pullup != 0u) {
+        forced_pullup = 0u;
+        ow_hal_strong_pullup(false);
+    }
+    fault_edges = 0u;
+    stall_armed = 0u;
+    tx_index = 0u;
+    diag_start_latched = 0u;
+    diag_bus_latched = 0u;
+    sda_low_seen = false;
+    last_recovery_ms = g_ms;
+    last_frame_ms = g_ms;
+    if ((GPIOA->idt & SDA_BIT) != 0u) {
+        g_health |= HEALTH_RECOVERED;
+    }
+}
+
+static void bus_health_poll(void)
+{
+    if ((g_ms - last_frame_ms) < STUCK_MS) {
+        sda_low_seen = false;
+        return;
+    }
+    if ((GPIOA->idt & SDA_BIT) != 0u) {
+        sda_low_seen = false;
+        return;
+    }
+    if (!sda_low_seen) {
+        sda_low_seen = true;
+        sda_low_since = g_ms;
+        return;
+    }
+    if ((GPIOA->idt & SCL_BIT) == 0u) {
+        sda_low_seen = false;
+        return;
+    }
+    if ((g_ms - sda_low_since) < STUCK_MS) {
+        return;
+    }
+    if ((g_ms - last_recovery_ms) < RECOVERY_RETRY_MS) {
+        return;
+    }
+    g_health |= HEALTH_SDA_STUCK;
+    i2c_bus_recover();
+}
+#endif
+
 /* Hand one snapshot byte to the master, applying a one-shot injected fault.
  * Both the address-match byte and the TDBE byte go through here, otherwise a
  * one-byte read would never see the fault. */
@@ -504,6 +608,10 @@ static void i2c_stop_done(void){
         i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
         pending_speed = -1;
     }
+    if (selected_pending) {
+        manager_select(pending_selected);
+        selected_pending = false;
+    }
 }
 
 static void i2c_poll(void)
@@ -513,9 +621,6 @@ static void i2c_poll(void)
 
     sts1 = I2C2->sts1;
     relevant = sts1 & ~STS1_TDBE;
-    if ((relevant != 0u) || (tx_mode != 0u) || (rx_mode != 0u)) {
-        last_i2c_cycles = DWT->CYCCNT;
-    }
 
     /* STARTF and BUSERR are diagnostic only here. Count each flag once per
      * software frame; the normal handlers below clear them. */
@@ -543,6 +648,7 @@ static void i2c_poll(void)
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
         pending_cmd = 0;
         pending_speed = -1;
+        selected_pending = false;
         rx_mode = 0;
         tx_mode = 0;
         first_byte = 0;
@@ -593,6 +699,9 @@ static void i2c_poll(void)
         /* Direction was sampled immediately after the STS1 read that clears
          * ADDRF. Do not move that read below the stale-flag writes above. */
         g_frames++;                 /* one matched address = one transaction */
+#ifndef DIAG_BUILD
+        last_frame_ms = g_ms;
+#endif
         if (fault_drop_frame != 0u) {
             g_frames--;
             fault_drop_frame = 0u;
@@ -676,7 +785,8 @@ static void i2c_poll(void)
                 g_regs[REG_CMD] = b;
                 pending_cmd = b;
             } else if (reg_ptr == REG_SELECTED) {
-                manager_select(b);
+                pending_selected = (uint8_t)(b & 0x0Fu);
+                selected_pending = true;
             } else if (reg_ptr == REG_FAULT) {
                 fault_apply(b);
             }
@@ -715,6 +825,7 @@ static void i2c_poll(void)
     if ((sts1 & (STS1_BUSERR | STS1_ARLOST | STS1_OUF)) != 0u) {
         pending_cmd = 0;
         pending_speed = -1;
+        selected_pending = false;
         rx_mode = 0;
         tx_mode = 0;
         first_byte = 0;
@@ -732,14 +843,14 @@ int main(void)
     manager_init();
 
     tx_map = manager_map();
-    last_i2c_cycles = DWT->CYCCNT;
 
     for (;;) {
         timebase_poll();
+#ifndef DIAG_BUILD
+        bus_health_poll();
+#endif
         i2c_poll();
-        if (!i2c_active() &&
-            ((DWT->CYCCNT - last_i2c_cycles) >
-             (I2C_MANAGER_GUARD_US * cycles_per_us))) {
+        if (!i2c_active()) {
             uint8_t st = (uint8_t)(manager_state_reg() & 0x0Fu);
             uint32_t t0 = DWT->CYCCNT;
 
@@ -750,6 +861,14 @@ int main(void)
                 max_cycles = d;
                 max_state = st;         /* state the call started in */
             }
+#ifndef DIAG_BUILD
+        } else if (i2c_active() &&
+                   ((g_ms - last_frame_ms) > BUS_FRAME_TIMEOUT_MS)) {
+            /* Master disappeared without STOP. No new address has arrived for
+             * longer than any legal transfer on this bus, so retire the stale
+             * software frame even if SCL/SDA were left low. */
+            i2c_bus_recover();
+#endif
         }
     }
 }

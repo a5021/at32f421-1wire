@@ -433,7 +433,7 @@ void suite_map(void)
         }
     }
 
-    t_start("T46", "health auto-recovery disabled");
+    t_start("T46", "health sda stuck policy");
     {
         (void)send_cmd(CMD_CLEAR_COUNTERS);
         sleep_ms(10u);
@@ -441,9 +441,9 @@ void suite_map(void)
         bus_hold_sda_low(50u);
         sleep_ms(20u);
 
-        /* Automatic SDA-stuck recovery is intentionally disabled. A stuck
-         * line must not be "recovered" behind the master's back; after the
-         * master releases SDA the target must answer normally. */
+        /* Production builds detect and recover; DIAG_BUILD leaves the line
+         * alone. Both policies must respond normally after the master releases
+         * SDA. */
         uint8_t seen = 0u;
 
         for (int attempt = 0; attempt < 3; attempt++) {
@@ -452,12 +452,38 @@ void suite_map(void)
             }
         }
 
-        if ((seen & (HEALTH_SDA_STUCK | HEALTH_RECOVERED)) != 0u) {
-            t_fail("auto-recovery fired, flags 0x%02X", seen);
-        } else if (!bus_probe(BRIDGE_ADDR)) {
-            t_fail("target did not respond after release");
+        if (!bus_probe(BRIDGE_ADDR)) {
+            t_fail("target did not respond after release, flags 0x%02X", seen);
+        } else if ((seen & (HEALTH_SDA_STUCK | HEALTH_RECOVERED)) != 0u) {
+            t_pass("detected/recovered, flags 0x%02X", seen);
         } else {
-            t_pass("no auto-recovery, target responded after release");
+            t_pass("no auto-recovery, target responded");
+        }
+    }
+
+    t_start("T46", "health open-frame timeout");
+    {
+        (void)send_cmd(CMD_CLEAR_COUNTERS);
+        sleep_ms(10u);
+
+        bool ack = bus_bb_abort_read(BRIDGE_ADDR, REG_MAGIC, 4);
+        sleep_ms(150u);
+
+        uint8_t seen = 0u;
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (bus_health_sample()) {
+                seen |= bus_health_flags;
+            }
+        }
+        if (!ack) {
+            t_fail("aborted read was not acknowledged");
+        } else if (!bus_probe(BRIDGE_ADDR)) {
+            t_fail("target did not respond after timeout, flags 0x%02X", seen);
+        } else if ((seen & HEALTH_RECOVERED) != 0u) {
+            t_pass("watchdog recovered, flags 0x%02X", seen);
+        } else {
+            t_pass("no watchdog, next address reset the frame");
         }
     }
 

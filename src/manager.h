@@ -13,6 +13,7 @@ extern "C" {
  */
 #define REG_MAGIC               0x00u
 #define REG_VERSION             0x01u
+#define BRIDGE_MAP_VERSION      0x04u
 #define REG_FLAGS               0x02u
 #define REG_DEVICES             0x03u
 #define REG_DS18B20             0x04u
@@ -64,12 +65,12 @@ extern "C" {
 #define FLAG_TEMP_ERROR         0x20u
 
 /* REG_HEALTH sticky bits. b0..b2 come from I2C status flags. b3/b4 are
- * reserved because automatic bus recovery is disabled. */
+ * production-only recovery indicators; DIAG_BUILD leaves them clear. */
 #define HEALTH_BUSERR           0x01u
 #define HEALTH_ARLOST           0x02u
 #define HEALTH_OUF              0x04u
-#define HEALTH_SDA_STUCK        0x08u   /* reserved */
-#define HEALTH_RECOVERED        0x10u   /* reserved */
+#define HEALTH_SDA_STUCK        0x08u   /* production: SDA stuck recovery */
+#define HEALTH_RECOVERED        0x10u   /* production: recovery completed */
 
 /* REG_FAULT codes: one shot, applied to the next transmitted byte. */
 #define FAULT_BIT_FLIP          1u

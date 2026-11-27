@@ -129,7 +129,8 @@ Requires `arm-none-eabi-gcc` (newlib) and GNU make.
 
 ```sh
 make            # build/at32f421-1wire.elf + .hex + .bin
-make test       # host tests (9 suites, 332 checks)
+make test       # host tests + Python register-map check (347 checks)
+make DIAG_BUILD=1   # diagnostic build: no automatic I2C recovery/watchdog
 make size
 ```
 
@@ -139,6 +140,10 @@ CMake (same toolchain flags, `cmake/arm-none-eabi.cmake`):
 cmake -S . -B build -G "MinGW Makefiles" \
       -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake
 cmake --build build
+# Diagnostic variant:
+cmake -S . -B build-diag -G "MinGW Makefiles" \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake -DDIAG_BUILD=ON
+cmake --build build-diag
 ```
 
 ## Flashing and debugging

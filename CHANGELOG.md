@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Changed
+- **Bridge:** register-map version is now `0x04`. `REG_SELECTED` is latched at
+  STOP with command/speed changes, so an aborted write cannot change the active
+  scratchpad selection.
+- **Bridge:** production builds restore SDA-stuck recovery and a 100 ms
+  open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics.
+- **Bridge:** I2C quiet-guard experiments were removed. They made short stress
+  runs clean but broke manager concurrency (`run quick` 32-34/48); the no-guard
+  baseline is 47/48 with only T22 failing.
 - **Bridge:** the polled path is the default again (`I2C_USE_IRQ=0`). The main
   loop serves the bus in a burst of 64 polls before any housekeeping, and the
   address handler clears `ADDR` and writes the precomputed first byte before

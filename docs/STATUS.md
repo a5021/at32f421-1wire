@@ -2,40 +2,41 @@
 
 Updated: 2026-11-27
 
-## Current diagnostic build: I2C priority guard
+## Current build (register map 0x04)
 
-The remaining short-run failures correlated with 1-Wire manager activity:
-paused manager gave 0 retries, active manager did not. LA captures during
-`couple` showed the slave releasing SDA while PA10 was switching; the I2C
-lines had the correct number of SCL edges and no visible SDA edge while SCL
-was high. The official RM V2.05 confirms `BUSERR` means an erroneous START or
-STOP and that `STRETCH=0` enables clock stretching.
-
-`manager_poll()` now runs only after 50 us with no I2C status/software-frame
-activity. This stops new TMR1+DMA 1-Wire passes from starting in the 1.5-4 us
-gaps between back-to-back I2C transactions. The snapshot pauses under
-continuous I2C polling and resumes when the bus is idle; measured cycle went
-1 -> 2 after traffic stopped.
+The I2C priority guard was tested and rejected. A 1 ms whole-manager guard and
+a 50 us guard made short stress runs clean, but both reduced `run quick` to
+32-34/48 by preventing normal manager progress. A low-level start gate and an
+operation-level gate also failed: deferring individual 1-Wire phases corrupts
+the operation. With the guard removed, `run quick` returns to 47/48 (only T22),
+while `stress 1000` shows the honest residual transport rate.
 
 | setup | result |
 |-------|--------|
-| `stress 500`, 400 kHz | 500 good, 0 torn, 0 invalid, 0 errors, 0 retries (twice) |
-| `stress 2000`, 400 kHz | 2000 good, 0 torn, 0 invalid, 0 errors, 0 retries |
-| `stress 1000`, 100 kHz | 1000 good, 0 torn, 0 invalid, 0 errors, 0 retries |
-| `repeat 0x00 256 2000`, 100 kHz | 2000 good, 0 wbad, 0 rbad |
+| `run quick`, production watchdog build | 47/48, only T22 fails |
+| `run quick`, `DIAG_BUILD=1` | 47/48, only T22 fails |
+| `stress 1000`, 400 kHz, no guard | 1000 good, 5 torn, 0 invalid, 0 errors, 1 retry |
+| T46 SDA-stuck policy | PASS in production and diagnostic builds |
+| T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
 | host tests | 347 checks, 0 failures; Python register-map check passes |
+| CMake | production and `DIAG_BUILD=ON` firmware builds link |
 
-Also fixed: `STS1` and `STS2` reads that clear `ADDR7F` are adjacent in the
-generated `-O2` assembly. Automatic SDA-stuck recovery and the 100 ms
-open-frame watchdog are removed in this diagnostic build. `REG_DIAG_START`
-(0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per open frame.
+Fixes in this build:
+- `STS1` and `STS2` reads that clear `ADDR7F` are adjacent in generated `-O2`
+  assembly.
+- Register-map version is `0x04`; the tester reads the shared version constant.
+- `REG_SELECTED` is latched at STOP with command/speed changes.
+- Production builds restore SDA-stuck recovery and a 100 ms open-frame
+  watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy.
+- `REG_DIAG_START` (0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per
+  open frame.
 
-Review follow-up: CMake now includes `manager.c`; a rescan that loses presence
-after finding a ROM returns `OW_NO_PRESENCE` and keeps the last good list;
-the tester includes the firmware register header, and `make test` checks the
-Python demo constants against it.
+The remaining transport retry correlates with PA10 edge activity. No software
+guard is retained because it trades transport errors for a non-functional
+1-Wire manager. The complete fix remains PA10 series resistance/layout or a
+different 1-Wire pin.
 
-## Historical numbers before the I2C priority guard
+## Historical numbers
 
 ## Decision
 
@@ -146,33 +147,28 @@ Nothing was wrong on the 1-Wire side.
 | cycle | advances 1/s under load, no freeze |
 
 The `0xFF` tails were truncations: `retry diff` showed valid bytes followed by
-`0xFF` from an arbitrary offset. A STOP was not being raised early. Triggered
-LA captures during `couple` later showed PA10 switching at the truncation
-phase, exact SCL edge counts, and no visible illegal SDA edge. The current
-50 us I2C quiet guard prevents the manager from starting new 1-Wire passes in
-short inter-frame gaps and removes the short-run retries listed above.
+`0xFF` from an arbitrary offset. Triggered LA captures during `couple` showed
+PA10 switching at the truncation phase, exact SCL edge counts, and no visible
+illegal SDA edge. Software guards were rejected because they break manager
+concurrency; the remaining retry is therefore treated as a PA10 coupling or
+in-flight pass overlap issue.
+
 ## Remaining
-- `run full` has not been rerun after the 50 us guard. `run quick` currently
-  reports 32/47 with both 1 ms and 50 us guards; failures include clock
-  measurement, manager-state timing, scratchpad and EEPROM tests. T46 now
-  expects auto-recovery to stay disabled and passes. The short transport runs
-  above remain clean, so the quick-suite failures are not attributed to the
-  guard alone without a baseline comparison.
-- The guard prevents new passes during back-to-back I2C traffic. A pass already
-  in flight when an unpredictable I2C master starts can still overlap PA10 with
-  I2C; hardware isolation on PA10 remains the complete fix for that case.
+- `run quick` is 47/48 in both production and diagnostic builds; only T22
+  fails. `run full` has not been rerun after the latest map/selection changes.
+- `stress 1000` without a guard has 1 retry. A pass already in flight when an
+  unpredictable I2C master starts can still overlap PA10 with I2C.
 - Review items that are not transport errors: `i2c_apply_speed()` switches the
   peripheral off from the STOP path, and TRISE is clamped to 63 at 100 kHz
   because the field is 6 bits wide.
 
 ## Next
 
-1. Rerun `run full` after the 50 us guard, especially T21/T22/T42.
+1. Rerun `run full`, especially T21/T22/T42.
 2. Keep short acceptance runs at 400 kHz and 100 kHz; only then repeat a longer
    `stress` run.
-3. For I2C masters that can start during an already-running 1-Wire pass, add a
-   100-220 ohm series resistor on PA10 near the MCU or separate the PA10 trace
-   and ground return from SDA/SCL. The guard cannot predict that arrival.
+3. Add a 100-220 ohm series resistor on PA10 near the MCU, separate the PA10
+   trace and ground return from SDA/SCL, or move 1-Wire to a different pin.
 
 Tried and useless: 100 uF on the 3.3 V rail (7/8/7 retries) and lowering the
 1-Wire DMA priority to low (4/10/4, inside the run-to-run spread).  Both were
@@ -242,10 +238,14 @@ e9ba176).
 - Transmit underrun (`OUF`) as the cause of the current `0xFF` tails: rejected.
   OUF stayed zero in the captured failures and clock stretching is enabled.
   The earlier missing-stretch defect was real, but it is separate from the
-  PA10-overlap failures addressed by the I2C priority guard.
-- 100 ms open-frame watchdog: removed. It recovered stale `tx_mode`, but could
-  also cut a healthy frame after a missed STOP; LA showed deterministic `0xFF`
-  tails at the recovery phase.
+  PA10-overlap failures.
+- I2C quiet guard (1 ms, 50 us, low-level and operation-level variants):
+  rejected. It made short stress runs clean but reduced `run quick` to
+  32-34/48 by blocking or corrupting manager operations. Guard=0 baseline is
+  47/48 with 1 retry per 1000 stress reads.
+- 100 ms open-frame watchdog: restored for production using time since the last
+  address match, so it does not cut a legal transfer. `DIAG_BUILD=1` disables
+  it together with SDA-stuck recovery.
 - Early BUSERR clear without frame teardown: did not remove CRC failures in
   short `couple` runs. Reverted to the normal handler order.
 - "The residual errors happen because this slave cannot stretch": wrong. The

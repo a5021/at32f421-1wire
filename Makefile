@@ -11,6 +11,10 @@ MCU      := -mcpu=cortex-m4 -mthumb -mfloat-abi=soft
 
 INCLUDES := -Isrc -Ivendor/at32f421
 DEFS     := -DAT32F421F8P7
+DIAG_BUILD ?= 0
+ifneq ($(DIAG_BUILD),0)
+DEFS     += -DDIAG_BUILD
+endif
 
 CFLAGS   := $(MCU) -std=gnu11 -O2 -g3 -flto -Wall -Wextra -Wshadow \
             -ffunction-sections -fdata-sections $(INCLUDES) $(DEFS) -MMD -MP

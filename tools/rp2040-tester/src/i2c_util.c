@@ -597,6 +597,38 @@ bool bus_bb_truncate(uint8_t addr7, uint8_t reg, int data_bits)
     return ack;
 }
 
+bool bus_bb_abort_read(uint8_t addr7, uint8_t reg, int data_bits)
+{
+    bus_recover();
+    bb_begin();
+    bus_txn += 2u;                 /* pointer write and read address */
+    bb_start();
+    bool ack = bb_byte((uint8_t)(addr7 << 1));
+    if (ack) {
+        ack = bb_byte(reg);
+    }
+    if (ack) {
+        bb_stop();
+        bb_start();
+        ack = bb_byte((uint8_t)(addr7 << 1) | 1u);
+    }
+    for (int i = 0; (ack) && (i < data_bits) && (i < 8); i++) {
+        bb_scl(1);
+        bb_delay();
+        bb_scl(0);
+        bb_delay();
+    }
+    /* Leave the frame open: SCL low, SDA released. Do not generate STOP and
+     * do not call bb_end(), which would recover the bus. */
+    bb_scl(0);
+    bb_sda(1);
+    bb_delay();
+    i2c_init(I2C_INST, current_speed);
+    gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
+    return ack;
+}
+
 /* Write a register with one bit of the data byte flipped, so the slave sees a
  * valid frame carrying a corrupted value. */
 bool bus_bb_corrupt_write(uint8_t addr7, uint8_t reg, uint8_t value,

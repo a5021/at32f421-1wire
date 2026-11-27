@@ -135,10 +135,10 @@ void manager_init(void)
     crc_table_init();
     crc_skip_table_init();
     g_regs[REG_MAGIC] = 0x5Au;
-    g_regs[REG_VERSION] = 0x03u;
+    g_regs[REG_VERSION] = BRIDGE_MAP_VERSION;
     memset(map_a, 0, sizeof(map_a));
     map_a[REG_MAGIC] = 0x5Au;
-    map_a[REG_VERSION] = 0x03u;
+    map_a[REG_VERSION] = BRIDGE_MAP_VERSION;
     ds18b20_init(&sensor, true);
     ds2431_init(&eeprom);
     clear_results();
@@ -240,7 +240,7 @@ static void publish_fill(uint8_t *dst)
 
     cycle_next = (uint16_t)(cycle + 1u);
     dst[REG_MAGIC] = 0x5Au;
-    dst[REG_VERSION] = 0x03u;
+    dst[REG_VERSION] = BRIDGE_MAP_VERSION;
     dst[REG_FLAGS] = flags;
     dst[REG_DEVICES] = (uint8_t)((device_count > 255u) ? 255u : device_count);
     dst[REG_DS18B20] = (uint8_t)((ds18b20_count > 255u) ? 255u : ds18b20_count);
