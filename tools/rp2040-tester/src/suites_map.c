@@ -433,7 +433,7 @@ void suite_map(void)
         }
     }
 
-    t_start("T46", "health sda stuck");
+    t_start("T46", "health auto-recovery disabled");
     {
         (void)send_cmd(CMD_CLEAR_COUNTERS);
         sleep_ms(10u);
@@ -441,8 +441,9 @@ void suite_map(void)
         bus_hold_sda_low(50u);
         sleep_ms(20u);
 
-        /* The flag is sticky, so read it a few times: a corrupted byte must
-         * not turn a detected fault into a failure. */
+        /* Automatic SDA-stuck recovery is intentionally disabled. A stuck
+         * line must not be "recovered" behind the master's back; after the
+         * master releases SDA the target must answer normally. */
         uint8_t seen = 0u;
 
         for (int attempt = 0; attempt < 3; attempt++) {
@@ -451,12 +452,12 @@ void suite_map(void)
             }
         }
 
-        if ((seen & HEALTH_SDA_STUCK) == 0u) {
-            t_fail("stuck not detected, flags 0x%02X", seen);
+        if ((seen & (HEALTH_SDA_STUCK | HEALTH_RECOVERED)) != 0u) {
+            t_fail("auto-recovery fired, flags 0x%02X", seen);
         } else if (!bus_probe(BRIDGE_ADDR)) {
-            t_fail("stuck detected, target did not recover");
+            t_fail("target did not respond after release");
         } else {
-            t_pass("detected, target responded after release");
+            t_pass("no auto-recovery, target responded after release");
         }
     }
 

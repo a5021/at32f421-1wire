@@ -11,7 +11,7 @@ lines had the correct number of SCL edges and no visible SDA edge while SCL
 was high. The official RM V2.05 confirms `BUSERR` means an erroneous START or
 STOP and that `STRETCH=0` enables clock stretching.
 
-`manager_poll()` now runs only after 1 ms with no I2C status/software-frame
+`manager_poll()` now runs only after 50 us with no I2C status/software-frame
 activity. This stops new TMR1+DMA 1-Wire passes from starting in the 1.5-4 us
 gaps between back-to-back I2C transactions. The snapshot pauses under
 continuous I2C polling and resumes when the bus is idle; measured cycle went
@@ -149,12 +149,15 @@ The `0xFF` tails were truncations: `retry diff` showed valid bytes followed by
 `0xFF` from an arbitrary offset. A STOP was not being raised early. Triggered
 LA captures during `couple` later showed PA10 switching at the truncation
 phase, exact SCL edge counts, and no visible illegal SDA edge. The current
-1 ms I2C quiet guard prevents the manager from starting new 1-Wire passes in
+50 us I2C quiet guard prevents the manager from starting new 1-Wire passes in
 short inter-frame gaps and removes the short-run retries listed above.
 ## Remaining
-- `run full` has not been rerun after the 1 ms guard. T22/T42 need rechecking;
-  the manager now resumes after 1 ms idle, but continuous map reads deliberately
-  pause new 1-Wire work.
+- `run full` has not been rerun after the 50 us guard. `run quick` currently
+  reports 32/47 with both 1 ms and 50 us guards; failures include clock
+  measurement, manager-state timing, scratchpad and EEPROM tests. T46 now
+  expects auto-recovery to stay disabled and passes. The short transport runs
+  above remain clean, so the quick-suite failures are not attributed to the
+  guard alone without a baseline comparison.
 - The guard prevents new passes during back-to-back I2C traffic. A pass already
   in flight when an unpredictable I2C master starts can still overlap PA10 with
   I2C; hardware isolation on PA10 remains the complete fix for that case.
@@ -164,7 +167,7 @@ short inter-frame gaps and removes the short-run retries listed above.
 
 ## Next
 
-1. Rerun `run full` after the 1 ms guard, especially T21/T22/T42.
+1. Rerun `run full` after the 50 us guard, especially T21/T22/T42.
 2. Keep short acceptance runs at 400 kHz and 100 kHz; only then repeat a longer
    `stress` run.
 3. For I2C masters that can start during an already-running 1-Wire pass, add a

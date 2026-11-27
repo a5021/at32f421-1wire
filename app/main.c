@@ -83,7 +83,7 @@ static volatile uint32_t max_cycles;/* worst manager_poll duration */
 static uint8_t  max_state;          /* state during that call */
 static uint32_t cycles_per_us = 120u;   /* measured at boot */
 static uint32_t last_i2c_cycles;        /* last observed I2C activity */
-#define I2C_MANAGER_GUARD_US     1000u
+#define I2C_MANAGER_GUARD_US     50u
 
 static uint32_t g_ms;               /* 1 ms tick, polled from SysTick */
 static uint32_t g_scl_hz = 100000u; /* timing currently programmed */

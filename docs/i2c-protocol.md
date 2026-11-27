@@ -8,7 +8,7 @@ in `docs/register-map.md`.
 
 The I2C engine is polled (no interrupts) with clock stretching enabled. Every
 superloop iteration calls `i2c_poll()`. `manager_poll()` runs only when no I2C
-frame is active and the bus has been quiet for 1 ms; this prevents a new
+frame is active and the bus has been quiet for 50 us; this prevents a new
 TMR1+DMA 1-Wire pass from starting in the tiny gap between back-to-back I2C
 transactions.
 
@@ -68,7 +68,7 @@ The prescaler is computed from the actual APB1 frequency:
 ```
 for (;;) {
     i2c_poll();                 // serve any pending I2C transaction
-    if (!i2c_active() && i2c_quiet_for(1000us)) {
+    if (!i2c_active() && i2c_quiet_for(50us)) {
         manager_poll();         // advance the 1-Wire state machine
     }
 }
@@ -78,7 +78,7 @@ The 1-Wire manager runs a non-blocking state machine: reset, write, read,
 DS18B20 convert, DS2431 read. Each operation is scheduled as a hardware pass
 on TMR1+DMA and completes asynchronously; `_poll` functions advance the state
 machine by waiting for the timer update flag. Under continuous I2C polling the
-snapshot may pause; it resumes as soon as the bus is idle for 1 ms.
+snapshot may pause; it resumes as soon as the bus is idle for 50 us.
 
 The slave may be addressed again before it has serviced the previous STOP: in
 that case the pending STOP is finished at the address match, so a command or a
@@ -97,8 +97,8 @@ The budget therefore scales with the bit time:
 
 | SCL | Bit time | Budget | Measured |
 |-----|----------|--------|----------|
-| 400 kHz | 2.5 us | ~20 us | 0 retries in 3 000 short reads with the 1 ms guard |
-| 100 kHz | 10 us | ~80 us | 0 retries in 1 000 short reads with the 1 ms guard |
+| 400 kHz | 2.5 us | ~20 us | 0 retries in 3 000 short reads with the 50 us guard |
+| 100 kHz | 10 us | ~80 us | 0 retries in 1 000 short reads with the 50 us guard |
 
 Every step between two `i2c_poll()` calls must stay under that budget.
 `publish()` used to be the longest one; it is now split into a shadow-buffer
