@@ -10,6 +10,9 @@
   open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics. Recovery
   now requires both SCL and SDA high and reports `HEALTH_RECOVERY_FAILED`
   otherwise; the SDA detector ignores frames waiting for data.
+- **Bridge:** speed changes are latched at STOP and applied from an idle
+  main-loop window, avoiding I2C reinitialisation races with the next START.
+  The 100 kHz TRISE clamp is documented as a safe field-width limit.
 - **Manager:** `map_copy_chunk()` uses per-word `memcpy` instead of aliased
   `uint32_t *` casts. ARM output remains a word-copy loop; phase-0 max measured
   4 us versus 6 us before.

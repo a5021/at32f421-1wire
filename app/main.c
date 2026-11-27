@@ -41,6 +41,8 @@ static uint32_t tx_mode;
 static const uint8_t *tx_map;       /* map snapshot latched at the address match */
 static uint32_t first_byte;
 static int      pending_speed = -1;
+static bool     speed_apply_pending;
+static uint32_t speed_apply_at_cycles;
 static uint8_t  pending_cmd;
 static i2c_select_latch_t selected_latch;
 
@@ -383,6 +385,9 @@ static void i2c_apply_speed(uint32_t scl_hz)
         speed = 0xFFFu;
     }
     if (rise > 0x3Fu) {
+        /* 100 kHz at 120 MHz APB1 asks for 121, but TRISE is 6 bits. The
+         * clamped 64 ticks are about 533 ns, still inside the 1000 ns standard
+         * mode maximum, so this is a field-width limit, not a timing failure. */
         rise = 0x3Fu;
     }
 
@@ -474,6 +479,7 @@ static bool i2c_bus_recover(void)
     first_byte = 0u;
     pending_cmd = 0u;
     pending_speed = -1;
+    speed_apply_pending = false;
     i2c_select_latch_abort(&selected_latch);
     fault_next = 0u;
     fault_pending = 0u;
@@ -623,8 +629,10 @@ static void i2c_stop_done(void){
         pending_cmd = 0u;
     }
     if (pending_speed >= 0) {
-        i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
-        pending_speed = -1;
+        /* Reinitialising I2C here can race the next START. The main loop
+         * applies the change after a short idle window. */
+        speed_apply_pending = true;
+        speed_apply_at_cycles = DWT->CYCCNT + (50u * cycles_per_us);
     }
     {
         uint8_t selected;
@@ -669,6 +677,7 @@ static void i2c_poll(void)
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
         pending_cmd = 0;
         pending_speed = -1;
+        speed_apply_pending = false;
         i2c_select_latch_abort(&selected_latch);
         rx_mode = 0;
         tx_mode = 0;
@@ -845,6 +854,7 @@ static void i2c_poll(void)
     if ((sts1 & (STS1_BUSERR | STS1_ARLOST | STS1_OUF)) != 0u) {
         pending_cmd = 0;
         pending_speed = -1;
+        speed_apply_pending = false;
         i2c_select_latch_abort(&selected_latch);
         rx_mode = 0;
         tx_mode = 0;
@@ -871,6 +881,14 @@ int main(void)
 #endif
         i2c_poll();
         if (!i2c_active()) {
+            if (speed_apply_pending &&
+                ((int32_t)(DWT->CYCCNT - speed_apply_at_cycles) >= 0) &&
+                ((I2C2->sts2 & 0x00000002u) == 0u) &&
+                ((GPIOA->idt & (SDA_BIT | SCL_BIT)) == (SDA_BIT | SCL_BIT))) {
+                i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
+                pending_speed = -1;
+                speed_apply_pending = false;
+            }
             uint8_t st = (uint8_t)(manager_state_reg() & 0x0Fu);
             uint32_t t0 = DWT->CYCCNT;
 

@@ -34,6 +34,9 @@ Fixes in this build:
   watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy. Recovery
   reports `HEALTH_RECOVERED` only when SCL and SDA both finish high, otherwise
   `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting for data.
+- Speed changes are latched at STOP but applied from the main loop after a
+  50 us idle-high window, avoiding peripheral re-init races with the next START.
+  The 100 kHz TRISE clamp is documented as a safe 6-bit field-width limit.
 - T22 now observes for 5 s instead of 2 s; it still rejects cycle jumps and
   non-monotonic values.
 - `REG_DIAG_START` (0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per
@@ -173,11 +176,11 @@ concurrency; the remaining retry is therefore treated as a PA10 coupling or
 in-flight pass overlap issue.
 
 ## Remaining
-- `stress 1000` at 400 kHz without a guard has 1 retry. A pass already in flight
-  when an unpredictable I2C master starts can still overlap PA10 with I2C.
-- Review items that are not transport errors: `i2c_apply_speed()` switches the
-  peripheral off from the STOP path, and TRISE is clamped to 63 at 100 kHz
-  because the field is 6 bits wide.
+- `stress 1000` at 400 kHz without a guard has 1-4 retries across runs. A pass
+  already in flight when an unpredictable I2C master starts can still overlap
+  PA10 with I2C.
+- The default 165 us 1-Wire slot remains an intentional DS18B20 timing
+  deviation; the strict 120 us option is measured but raises I2C retries.
 
 ## Next
 

@@ -59,7 +59,11 @@ reaches its idle state; a later command overwrites a still-pending one.
 | `1`   | 400 kHz (fast mode) |
 
 The prescaler is computed from the actual APB1 frequency:
-`APB1/(2·SCL)` standard, `APB1/(3·SCL)` fast (1:2 high:low).
+`APB1/(2·SCL)` standard, `APB1/(3·SCL)` fast (1:2 high:low). A speed change is
+latched at STOP but applied from the main loop after 50 us of idle-high bus,
+so peripheral reinitialisation cannot race the next START. At 120 MHz APB1 the
+100 kHz TRISE value clamps to 63 (about 533 ns), still below the standard-mode
+1000 ns maximum.
 
 ## Superloop timing
 
