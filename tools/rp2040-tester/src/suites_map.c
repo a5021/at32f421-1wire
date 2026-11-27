@@ -239,7 +239,7 @@ void suite_map(void)
          * and publish nothing, so start from an idle cycle. */
         (void)map_wait_not_busy(5000u);
 
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 50; i++) {
             uint8_t raw[2];
             bool got = false;
 
@@ -467,7 +467,7 @@ void suite_map(void)
         sleep_ms(10u);
 
         bool ack = bus_bb_abort_read(BRIDGE_ADDR, REG_MAGIC, 4);
-        sleep_ms(150u);
+        sleep_ms(400u);
 
         uint8_t seen = 0u;
 

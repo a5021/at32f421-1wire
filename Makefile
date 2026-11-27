@@ -65,7 +65,7 @@ HOST_SRCS := \
 	src/manager.c \
 	tests/test_manager.c
 HOST_CFLAGS := -std=c11 -O1 -g -Wall -Wextra -Wshadow -Wno-unused-parameter \
-               -Isrc -Itests -Itests/mock -Itools/rp2040-tester/src
+               -Isrc -Iapp -Itests -Itests/mock -Itools/rp2040-tester/src
 
 # Flashing / debugging through CMSIS-DAP (WCH-Link) with pyOCD + Artery DFP.
 PYOCD        ?= pyocd

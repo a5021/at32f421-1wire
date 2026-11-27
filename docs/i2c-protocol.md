@@ -95,7 +95,7 @@ The budget therefore scales with the bit time:
 | SCL | Bit time | Budget | Measured |
 |-----|----------|--------|----------|
 | 400 kHz | 2.5 us | ~20 us | 1 retry in 1 000 short reads without a guard |
-| 100 kHz | 10 us | ~80 us | not re-baselined after guard removal |
+| 100 kHz | 10 us | ~80 us | 0 retries in 1 000 short reads without a guard |
 
 Every step between two `i2c_poll()` calls must stay under that budget.
 `publish()` used to be the longest one; it is now split into a shadow-buffer

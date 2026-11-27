@@ -102,7 +102,7 @@ the four bytes cannot tear and no seqlock is needed.
 pathological event, so the flag is enough and a rate would add nothing.
 
 The flags are sticky. Production builds enable SDA-stuck recovery and a
-100 ms open-frame watchdog. The watchdog uses the last address-match time, so
+250 ms open-frame watchdog. The watchdog uses the last address-match time, so
 it does not cut a legal transfer, and recovers even if the vanished master
 left SCL or SDA low. `DIAG_BUILD=1` disables both mechanisms and leaves bits
 3/4 clear.

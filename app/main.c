@@ -3,6 +3,7 @@
 
 #include "at32f421.h"
 #include "clock.h"
+#include "i2c_latch.h"
 #include "manager.h"
 #include "ow_hal.h"
 #include "onewire.h"
@@ -41,8 +42,7 @@ static const uint8_t *tx_map;       /* map snapshot latched at the address match
 static uint32_t first_byte;
 static int      pending_speed = -1;
 static uint8_t  pending_cmd;
-static uint8_t  pending_selected;
-static bool     selected_pending;
+static i2c_select_latch_t selected_latch;
 
 /* One-shot fault injection, armed through REG_FAULT.  Used by the tester to
  * prove that a corrupted byte, a skipped byte or a miscounted frame is caught
@@ -98,7 +98,7 @@ static uint32_t last_recovery_ms;
 static bool     sda_low_seen;
 #define STUCK_MS                10u
 #define RECOVERY_RETRY_MS       100u
-#define BUS_FRAME_TIMEOUT_MS    100u
+#define BUS_FRAME_TIMEOUT_MS    250u
 #endif
 
 /* Long-read STOP diagnostic: 0x6C counts STOPs before byte 250; 0x6D stores
@@ -473,7 +473,7 @@ static void i2c_bus_recover(void)
     first_byte = 0u;
     pending_cmd = 0u;
     pending_speed = -1;
-    selected_pending = false;
+    i2c_select_latch_abort(&selected_latch);
     fault_next = 0u;
     fault_pending = 0u;
     fault_drop_frame = 0u;
@@ -608,9 +608,12 @@ static void i2c_stop_done(void){
         i2c_apply_speed(pending_speed != 0 ? 400000u : 100000u);
         pending_speed = -1;
     }
-    if (selected_pending) {
-        manager_select(pending_selected);
-        selected_pending = false;
+    {
+        uint8_t selected;
+
+        if (i2c_select_latch_commit(&selected_latch, &selected)) {
+            manager_select(selected);
+        }
     }
 }
 
@@ -648,7 +651,7 @@ static void i2c_poll(void)
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
         pending_cmd = 0;
         pending_speed = -1;
-        selected_pending = false;
+        i2c_select_latch_abort(&selected_latch);
         rx_mode = 0;
         tx_mode = 0;
         first_byte = 0;
@@ -785,8 +788,7 @@ static void i2c_poll(void)
                 g_regs[REG_CMD] = b;
                 pending_cmd = b;
             } else if (reg_ptr == REG_SELECTED) {
-                pending_selected = (uint8_t)(b & 0x0Fu);
-                selected_pending = true;
+                i2c_select_latch_write(&selected_latch, b);
             } else if (reg_ptr == REG_FAULT) {
                 fault_apply(b);
             }
@@ -825,7 +827,7 @@ static void i2c_poll(void)
     if ((sts1 & (STS1_BUSERR | STS1_ARLOST | STS1_OUF)) != 0u) {
         pending_cmd = 0;
         pending_speed = -1;
-        selected_pending = false;
+        i2c_select_latch_abort(&selected_latch);
         rx_mode = 0;
         tx_mode = 0;
         first_byte = 0;

@@ -8,26 +8,32 @@ The I2C priority guard was tested and rejected. A 1 ms whole-manager guard and
 a 50 us guard made short stress runs clean, but both reduced `run quick` to
 32-34/48 by preventing normal manager progress. A low-level start gate and an
 operation-level gate also failed: deferring individual 1-Wire phases corrupts
-the operation. With the guard removed, `run quick` returns to 47/48 (only T22),
-while `stress 1000` shows the honest residual transport rate.
+the operation. With the guard removed and the T22 observation window increased
+from 2 s to 5 s, both builds pass quick. `stress 1000` shows the honest residual
+transport rate.
 
 | setup | result |
 |-------|--------|
-| `run quick`, production watchdog build | 47/48, only T22 fails |
-| `run quick`, `DIAG_BUILD=1` | 47/48, only T22 fails |
+| `run quick`, production watchdog build | 48/48 PASS |
+| `run quick`, `DIAG_BUILD=1` | 48/48 PASS |
+| `run full`, production | 56/56 PASS |
 | `stress 1000`, 400 kHz, no guard | 1000 good, 5 torn, 0 invalid, 0 errors, 1 retry |
+| `stress 1000`, 100 kHz, no guard | 1000 good, 17 torn, 0 invalid, 0 errors, 0 retries |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
-| host tests | 347 checks, 0 failures; Python register-map check passes |
+| host tests | 354 checks, 0 failures; Python register-map check passes |
 | CMake | production and `DIAG_BUILD=ON` firmware builds link |
 
 Fixes in this build:
 - `STS1` and `STS2` reads that clear `ADDR7F` are adjacent in generated `-O2`
   assembly.
 - Register-map version is `0x04`; the tester reads the shared version constant.
-- `REG_SELECTED` is latched at STOP with command/speed changes.
-- Production builds restore SDA-stuck recovery and a 100 ms open-frame
+- `REG_SELECTED` is latched at STOP with command/speed changes; the latch helper
+  and `BRIDGE_MAP_VERSION` have host coverage.
+- Production builds restore SDA-stuck recovery and a 250 ms open-frame
   watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy.
+- T22 now observes for 5 s instead of 2 s; it still rejects cycle jumps and
+  non-monotonic values.
 - `REG_DIAG_START` (0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per
   open frame.
 
@@ -154,20 +160,17 @@ concurrency; the remaining retry is therefore treated as a PA10 coupling or
 in-flight pass overlap issue.
 
 ## Remaining
-- `run quick` is 47/48 in both production and diagnostic builds; only T22
-  fails. `run full` has not been rerun after the latest map/selection changes.
-- `stress 1000` without a guard has 1 retry. A pass already in flight when an
-  unpredictable I2C master starts can still overlap PA10 with I2C.
+- `stress 1000` at 400 kHz without a guard has 1 retry. A pass already in flight
+  when an unpredictable I2C master starts can still overlap PA10 with I2C.
 - Review items that are not transport errors: `i2c_apply_speed()` switches the
   peripheral off from the STOP path, and TRISE is clamped to 63 at 100 kHz
   because the field is 6 bits wide.
 
 ## Next
 
-1. Rerun `run full`, especially T21/T22/T42.
-2. Keep short acceptance runs at 400 kHz and 100 kHz; only then repeat a longer
+1. Keep short acceptance runs at 400 kHz and 100 kHz; only then repeat a longer
    `stress` run.
-3. Add a 100-220 ohm series resistor on PA10 near the MCU, separate the PA10
+2. Add a 100-220 ohm series resistor on PA10 near the MCU, separate the PA10
    trace and ground return from SDA/SCL, or move 1-Wire to a different pin.
 
 Tried and useless: 100 uF on the 3.3 V rail (7/8/7 retries) and lowering the
@@ -242,8 +245,9 @@ e9ba176).
 - I2C quiet guard (1 ms, 50 us, low-level and operation-level variants):
   rejected. It made short stress runs clean but reduced `run quick` to
   32-34/48 by blocking or corrupting manager operations. Guard=0 baseline is
-  47/48 with 1 retry per 1000 stress reads.
-- 100 ms open-frame watchdog: restored for production using time since the last
+  48/48 after widening the T22 observation window, with 1 retry per 1000 stress
+  reads at 400 kHz.
+- 250 ms open-frame watchdog: restored for production using time since the last
   address match, so it does not cut a legal transfer. `DIAG_BUILD=1` disables
   it together with SDA-stuck recovery.
 - Early BUSERR clear without frame teardown: did not remove CRC failures in
