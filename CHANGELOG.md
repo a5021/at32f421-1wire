@@ -14,6 +14,9 @@
   open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics. Recovery
   now requires both SCL and SDA high and reports `HEALTH_RECOVERY_FAILED`
   otherwise; the SDA detector ignores frames waiting for data.
+- **Bridge:** production enables an independent WDT with a nominal 4 s timeout,
+  reloaded once per main-loop pass. HardFault requests a system reset;
+  `DIAG_BUILD=1` keeps the WDT off and the fault handler halted for debugging.
 - **Bridge:** BUSERR/ARLOST/OUF teardown now writes a dummy DT byte and cycles
   I2CEN, releasing hardware clock stretch immediately instead of waiting for
   the open-frame watchdog.

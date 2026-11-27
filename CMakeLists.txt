@@ -22,7 +22,7 @@ add_executable(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME} PRIVATE src vendor/at32f421)
 target_compile_definitions(${PROJECT_NAME} PRIVATE AT32F421F8P7)
-option(DIAG_BUILD "Disable automatic I2C bus recovery for diagnostics" OFF)
+option(DIAG_BUILD "Disable automatic I2C recovery and the hardware watchdog for diagnostics" OFF)
 if(DIAG_BUILD)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DIAG_BUILD)
 endif()

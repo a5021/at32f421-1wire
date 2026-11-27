@@ -24,6 +24,16 @@
 #define STS1_OUF                0x00000800u
 #define STS2_DIRF               0x00000004u
 
+#define WDT_CMD_UNLOCK         0x00005555u
+#define WDT_CMD_ENABLE         0x0000CCCCu
+#define WDT_CMD_RELOAD         0x0000AAAAu
+#define WDT_DIV_64             0x00000004u
+#define WDT_RELOAD_4S          2500u
+#define WDT_CMD                (*(volatile uint32_t *)(WDT_BASE + 0x00u))
+#define WDT_DIV                (*(volatile uint32_t *)(WDT_BASE + 0x04u))
+#define WDT_RLD                (*(volatile uint32_t *)(WDT_BASE + 0x08u))
+#define WDT_STS                (*(volatile uint32_t *)(WDT_BASE + 0x0Cu))
+
 extern volatile uint32_t g_i2c_speed;
 
 extern uint8_t g_regs[256];
@@ -147,6 +157,33 @@ static void timebase_poll(void)
         g_ms++;
     }
 }
+
+#ifndef DIAG_BUILD
+static void watchdog_init(void)
+{
+    uint32_t guard = 100000u;
+
+    /* LICK is 30..60 kHz (40 kHz typical). /64 and 2500 ticks give a
+     * nominal 4 s timeout, bounded by about 2.7..5.3 s across that range. */
+    CRM->ctrlsts_bit.licken = 1u;
+    while ((CRM->ctrlsts_bit.lickstbl == 0u) && (guard != 0u)) {
+        guard--;
+    }
+    WDT_CMD = WDT_CMD_UNLOCK;
+    WDT_DIV = WDT_DIV_64;
+    WDT_RLD = WDT_RELOAD_4S;
+    while (((WDT_STS & 0x00000003u) != 0x00000003u) && (guard != 0u)) {
+        guard--;
+    }
+    WDT_CMD = WDT_CMD_ENABLE;
+    WDT_CMD = WDT_CMD_RELOAD;
+}
+
+static void watchdog_kick(void)
+{
+    WDT_CMD = WDT_CMD_RELOAD;
+}
+#endif
 
 /* Measure how many DWT cycles a real millisecond takes, so the diagnostics do
  * not depend on the nominal clock. */
@@ -893,6 +930,10 @@ int main(void)
 
     manager_init();
 
+#ifndef DIAG_BUILD
+    watchdog_init();
+#endif
+
     tx_map = manager_map();
 
     for (;;) {
@@ -929,13 +970,22 @@ int main(void)
             i2c_bus_recover();
 #endif
         }
+#ifndef DIAG_BUILD
+        watchdog_kick();
+#endif
     }
 }
 
 void HardFault_Handler(void)
 {
+#ifdef DIAG_BUILD
     for (;;) {
     }
+#else
+    NVIC_SystemReset();
+    for (;;) {
+    }
+#endif
 }
 
 void MemManage_Handler(void) __attribute__((alias("HardFault_Handler")));

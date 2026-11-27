@@ -21,6 +21,8 @@ transport rate.
 | `stress 1000`, 100 kHz, no guard | latest: 3 retries, 0 invalid/errors |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
+| hardware WDT timeout | PASS: suppressed reload caused reboot and `CRM_WDTRSTF` |
+| HardFault reset | PASS: production handler caused reboot and `CRM_SWRSTF` |
 | host tests | 369 checks, 0 failures; Python register-map check passes |
 | CMake | production and `DIAG_BUILD=ON` firmware builds link |
 
@@ -42,6 +44,9 @@ Fixes in this build:
   watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy. Recovery
   reports `HEALTH_RECOVERED` only when SCL and SDA both finish high, otherwise
   `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting for data.
+- Production also enables the independent WDT with a nominal 4 s timeout and
+  reloads it once per main-loop pass. `HardFault_Handler` requests a system
+  reset; `DIAG_BUILD=1` leaves the WDT off and preserves the debugger halt.
 - BUSERR/ARLOST/OUF now load a dummy `DT` byte and cycle `I2CEN` to release a
   possible hardware stretch immediately, instead of waiting for the watchdog.
 - Speed changes are latched at STOP but applied from the main loop after a
@@ -67,6 +72,12 @@ The remaining transport retry correlates with PA10 edge activity. No software
 guard is retained because it trades transport errors for a non-functional
 1-Wire manager. The complete fix remains PA10 series resistance/layout or a
 different 1-Wire pin.
+
+`torn` counts CRC-valid reads whose two `REG_SEQ` probes crossed a publish. It
+is a snapshot-boundary observation, not a failed transfer or a retry. `retries`
+counts CRC or transport failures that the master had to repeat. Acceptance
+target: zero invalid/errors and at most one retry per 1000 reads at 400 kHz;
+the current 1-6 retry spread does not meet that target consistently.
 
 ## Historical numbers
 
@@ -200,8 +211,8 @@ in-flight pass overlap issue.
    trace and ground return from SDA/SCL, or move 1-Wire to a different pin.
 
 Tried and useless: 100 uF on the 3.3 V rail (7/8/7 retries) and lowering the
-1-Wire DMA priority to low (4/10/4, inside the run-to-run spread).  Both were
-reverted; firmware is at e9ba176 again.
+1-Wire DMA priority to low (4/10/4, inside the run-to-run spread). Both were
+reverted.
 
 ### Review fixes (2026-11-25)
 
