@@ -14,11 +14,11 @@ transport rate.
 
 | setup | result |
 |-------|--------|
-| `run quick`, production watchdog build | 47-48/48 across runs; T21/T55 flaky |
+| `run quick`, production watchdog build | 48/48 PASS |
 | `run quick`, `DIAG_BUILD=1` | 48/48 before the diagnostic-map bump |
-| `run full`, production | 55-56/56 across runs; T21/T30/T55 flaky |
-| `stress 1000`, 400 kHz, no guard | three runs: 1/6/3 retries, 0 invalid/errors |
-| `stress 1000`, 100 kHz, no guard | 6 retries, 0 invalid/errors |
+| `run full`, production | 56/56 PASS |
+| `stress 1000`, 400 kHz, no guard | latest: 5 retries, 0 invalid/errors; three-run baseline 1/6/3 |
+| `stress 1000`, 100 kHz, no guard | latest: 3 retries, 0 invalid/errors |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
 | host tests | 369 checks, 0 failures; Python register-map check passes |
@@ -42,6 +42,8 @@ Fixes in this build:
   watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy. Recovery
   reports `HEALTH_RECOVERED` only when SCL and SDA both finish high, otherwise
   `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting for data.
+- BUSERR/ARLOST/OUF now load a dummy `DT` byte and cycle `I2CEN` to release a
+  possible hardware stretch immediately, instead of waiting for the watchdog.
 - Speed changes are latched at STOP but applied from the main loop after a
   50 us idle-high window, avoiding peripheral re-init races with the next START.
   The 100 kHz TRISE clamp is documented as a safe 6-bit field-width limit.

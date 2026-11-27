@@ -14,6 +14,9 @@
   open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics. Recovery
   now requires both SCL and SDA high and reports `HEALTH_RECOVERY_FAILED`
   otherwise; the SDA detector ignores frames waiting for data.
+- **Bridge:** BUSERR/ARLOST/OUF teardown now writes a dummy DT byte and cycles
+  I2CEN, releasing hardware clock stretch immediately instead of waiting for
+  the open-frame watchdog.
 - **Bridge:** speed changes are latched at STOP and applied from an idle
   main-loop window, avoiding I2C reinitialisation races with the next START.
   The 100 kHz TRISE clamp is documented as a safe field-width limit.

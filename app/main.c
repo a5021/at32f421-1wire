@@ -648,6 +648,29 @@ static void i2c_stop_done(void){
     }
 }
 
+static void i2c_abort_frame(void)
+{
+    /* A failed frame can leave the peripheral stretched with TDBE set. Load a
+     * dummy byte, then cycle PE so SCL/SDA are released immediately instead of
+     * waiting for the open-frame watchdog. */
+    I2C2->dt = 0xFFu;
+    I2C2->ctrl1_bit.stretch = 0;
+    I2C2->ctrl1_bit.i2cen = 0;
+    I2C2->ctrl1_bit.i2cen = 1;
+    I2C2->ctrl1_bit.acken = 1;
+
+    reg_ptr = 0u;
+    rx_mode = 0u;
+    tx_mode = 0u;
+    first_byte = 0u;
+    pending_cmd = 0u;
+    pending_speed = -1;
+    speed_apply_pending = false;
+    i2c_select_latch_abort(&selected_latch);
+    diag_start_latched = 0u;
+    diag_bus_latched = 0u;
+}
+
 static void i2c_poll(void)
 {
     uint32_t sts1;
@@ -680,13 +703,7 @@ static void i2c_poll(void)
         g_i2c_err_ouf++;
         g_health |= HEALTH_OUF;
         I2C2->sts1 = (uint32_t)~(STS1_OUF & 0x0000DF00u);
-        pending_cmd = 0;
-        pending_speed = -1;
-        speed_apply_pending = false;
-        i2c_select_latch_abort(&selected_latch);
-        rx_mode = 0;
-        tx_mode = 0;
-        first_byte = 0;
+        i2c_abort_frame();
         return;
     }
 
@@ -859,19 +876,10 @@ static void i2c_poll(void)
     if ((sts1 & STS1_OUF) != 0u) {
         /* Handled at the top of this function. */
     }
-    /* An aborted transfer must not leave a command or a speed change armed
-     * for the next STOP, which belongs to somebody else's transaction.  A NACK
-     * is not an abort: the master NACKs the last byte of every read, so the
-     * frame teardown belongs to STOP/ADDR, not here.  A broken frame drops the
-     * transfer: BUSERR/ARLOST mean the protocol is out of sync. */
+    /* A broken frame drops the transfer and releases any hardware stretch.
+     * A normal read NACK is not an abort; STOP/ADDR retires that frame. */
     if ((sts1 & (STS1_BUSERR | STS1_ARLOST | STS1_OUF)) != 0u) {
-        pending_cmd = 0;
-        pending_speed = -1;
-        speed_apply_pending = false;
-        i2c_select_latch_abort(&selected_latch);
-        rx_mode = 0;
-        tx_mode = 0;
-        first_byte = 0;
+        i2c_abort_frame();
     }
 }
 
