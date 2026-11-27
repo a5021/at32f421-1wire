@@ -13,7 +13,7 @@ extern "C" {
  */
 #define REG_MAGIC               0x00u
 #define REG_VERSION             0x01u
-#define BRIDGE_MAP_VERSION      0x04u
+#define BRIDGE_MAP_VERSION      0x05u
 #define REG_FLAGS               0x02u
 #define REG_DEVICES             0x03u
 #define REG_DS18B20             0x04u
@@ -47,6 +47,8 @@ extern "C" {
 #define REG_DIAG_GATE_POS       0x4Au   /* tx_index at the last refusal (live) */
 #define REG_DIAG_START          0x4Cu   /* STARTF while a frame was open */
 #define REG_DIAG_BUS            0x4Du   /* BUSERR while a frame was open */
+#define REG_DIAG_EARLY_NACK     0x4Eu   /* ACKFAIL before the last map byte */
+#define REG_DIAG_EARLY_NACK_POS 0x4Fu   /* tx_index of the last early NACK */
 #define REG_MAX_STEP            0x79u   /* worst manager_poll, us, 16-bit LE */
 #define REG_MAX_STEP_H          0x7Au
 #define REG_MAX_STATE           0x7Bu   /* manager state of that call */

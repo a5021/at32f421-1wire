@@ -66,7 +66,6 @@ static const uint8_t fault_pulses[65] = {
     0
 };
 
-volatile uint32_t g_i2c_err_ack;
 volatile uint32_t g_i2c_err_bus;
 volatile uint32_t g_i2c_err_arl;
 volatile uint32_t g_i2c_err_ouf;
@@ -117,6 +116,8 @@ static uint8_t  diag_gate_cnt;      /* STOPF refused while tx_mode was set */
 static uint8_t  diag_gate_pos;      /* tx_index at the last refused STOPF */
 static uint8_t  diag_start_cnt;     /* STARTF seen while a frame was open */
 static uint8_t  diag_bus_cnt;       /* BUSERR seen while a frame was open */
+static uint8_t  diag_early_nack_cnt;
+static uint8_t  diag_early_nack_pos;
 static uint8_t  diag_start_latched;
 static uint8_t  diag_bus_latched;
 
@@ -240,6 +241,10 @@ static uint8_t reg_byte(uint32_t addr)
         return diag_start_cnt;
     case REG_DIAG_BUS:
         return diag_bus_cnt;
+    case REG_DIAG_EARLY_NACK:
+        return diag_early_nack_cnt;
+    case REG_DIAG_EARLY_NACK_POS:
+        return diag_early_nack_pos;
     case REG_MAX_STEP: {
         uint32_t us = max_cycles / cycles_per_us;
 
@@ -279,7 +284,6 @@ static void health_clear(void)
     g_frames = 0u;
     g_health = 0u;
     g_err_bus = 0u;
-    g_i2c_err_ack = 0u;
     g_i2c_err_bus = 0u;
     g_i2c_err_arl = 0u;
     g_i2c_err_ouf = 0u;
@@ -305,6 +309,8 @@ static void health_clear(void)
     diag_gate_pos = 0u;
     diag_start_cnt = 0u;
     diag_bus_cnt = 0u;
+    diag_early_nack_cnt = 0u;
+    diag_early_nack_pos = 0u;
     diag_start_latched = 0u;
     diag_bus_latched = 0u;
 }
@@ -395,13 +401,12 @@ static void i2c_apply_speed(uint32_t scl_hz)
     I2C2->clkctrl_bit.speed = speed;
     I2C2->tmrise_bit.risetime = rise;
 
-    I2C2->ctrl1_bit.i2cen = 1;
-    I2C2->ctrl1_bit.acken = 1;
     /* CTRL1 bit 7 is NOSTRETCH, not "enable stretching": 0 holds SCL low while
      * DT is being loaded, 1 lets the master clock the byte out immediately.
-     * With 1 the first byte after the address came back with bit 7 forced and
-     * a late byte became an underrun. */
+     * Program it while the peripheral is disabled. */
     I2C2->ctrl1_bit.stretch = 0;
+    I2C2->ctrl1_bit.i2cen = 1;
+    I2C2->ctrl1_bit.acken = 1;
 
     g_i2c_speed = (scl_hz > 100000u) ? 1u : 0u;
     g_scl_hz = scl_hz;
@@ -687,8 +692,16 @@ static void i2c_poll(void)
 
     if ((sts1 & STS1_ACKFAIL) != 0u) {
         /* ACKFAIL alone is not proof that the master stopped reading; retain
-         * tx_mode until STOPF or a new address match retires this frame. */
-        g_i2c_err_ack++;
+         * tx_mode until STOPF or a new address match retires this frame.
+         * Full 256-byte map reads end with tx_index == 256 and a normal NACK.
+         * Short register reads are at most 128 bytes in the tester, so only a
+         * later NACK is a useful early-NACK diagnostic. */
+        if ((tx_mode != 0u) && (tx_index > 128u) && (tx_index < 255u)) {
+            if (diag_early_nack_cnt != 0xFFu) {
+                diag_early_nack_cnt++;
+            }
+            diag_early_nack_pos = (uint8_t)tx_index;
+        }
         I2C2->sts1 = (uint32_t)~(STS1_ACKFAIL & 0x0000DF00u);
     }
 

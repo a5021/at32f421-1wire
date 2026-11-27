@@ -10,7 +10,7 @@ Canonical description of the I2C slave register file exposed by
 | Address | Size | Name | Meaning |
 |---------|------|------|---------|
 | `0x00` | 1 | `REG_MAGIC` | `0x5A` — sanity byte the master should check first |
-| `0x01` | 1 | `REG_VERSION` | Register-map version, `0x04` |
+| `0x01` | 1 | `REG_VERSION` | Register-map version, `0x05` |
 | `0x02` | 1 | `REG_FLAGS` | Status flags (see below) |
 | `0x03` | 1 | `REG_DEVICES` | Total devices found by search (may exceed 16) |
 | `0x04` | 1 | `REG_DS18B20` | DS18B20 count (may exceed 16) |
@@ -28,7 +28,8 @@ Canonical description of the I2C slave register file exposed by
 | `0x49..0x4A` | 2 | `REG_DIAG_GATE*` | STOPF refused during a live transmit: event count and last `tx_index` |
 | `0x4B` | 1 | — | Reserved, reads `0x00`, covered by map CRC |
 | `0x4C..0x4D` | 2 | `REG_DIAG_START/BUS` | STARTF/BUSERR observed while a software frame was open, once per frame |
-| `0x4E..0x5F` | 18 | — | Reserved, reads `0x00`, covered by map CRC |
+| `0x4E..0x4F` | 2 | `REG_DIAG_EARLY_NACK*` | ACKFAIL after byte 128 but before the last map byte: event count and last `tx_index` |
+| `0x50..0x5F` | 16 | — | Reserved, reads `0x00`, covered by map CRC |
 | `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters, `4` = pause, `5` = resume (writable) |
 | `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed; latched at STOP (writable) |
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
@@ -156,6 +157,7 @@ computing the same CRC:
 | `0x09..0x0F` | health block and `REG_SPEED`, injected at read time |
 | `0x49..0x4A` | live STOPF-gate diagnostics |
 | `0x4C..0x4D` | live STARTF/BUSERR diagnostics |
+| `0x4E..0x4F` | live early-NACK diagnostics |
 | `0x60..0x6F` | command latch, selection, fault, the CRC itself and the live diagnostics |
 | `0x79..0x7F` | worst-step and EEPROM timing counters, live |
 

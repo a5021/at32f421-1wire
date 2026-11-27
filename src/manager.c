@@ -201,6 +201,7 @@ static bool crc_skip(uint32_t i)
            ((i >= REG_CMD) && (i <= REG_DIAG_REASON)) ||
            ((i >= REG_DIAG_GATE) && (i <= REG_DIAG_GATE_POS)) ||
            ((i >= REG_DIAG_START) && (i <= REG_DIAG_BUS)) ||
+           ((i >= REG_DIAG_EARLY_NACK) && (i <= REG_DIAG_EARLY_NACK_POS)) ||
            ((i >= REG_MAX_STEP) && (i <= REG_EEP_POLL));
 }
 

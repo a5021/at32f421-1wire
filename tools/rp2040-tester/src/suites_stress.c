@@ -72,6 +72,7 @@ static bool map_volatile_index(int i)
            ((i >= (int)REG_CMD) && (i <= (int)REG_DIAG_REASON)) ||
            ((i >= (int)REG_DIAG_GATE) && (i <= (int)REG_DIAG_GATE_POS)) ||
            ((i >= (int)REG_DIAG_START) && (i <= (int)REG_DIAG_BUS)) ||
+           ((i >= (int)REG_DIAG_EARLY_NACK) && (i <= (int)REG_DIAG_EARLY_NACK_POS)) ||
         ((i >= (int)REG_MAX_STEP) && (i <= (int)REG_EEP_POLL));
 }
 
@@ -166,6 +167,16 @@ static void retry_stats_print(void)
         printf(" %u", (unsigned)g_off_bucket[i]);
     }
     printf(" unknown %u\n", (unsigned)g_off_unknown);
+
+    {
+        uint8_t d[6];
+
+        if ((bus_read_reg(REG_DIAG_GATE, d, 2u) == 2) &&
+            (bus_read_reg(REG_DIAG_START, d + 2, 4u) == 4)) {
+            printf("diag gate %u@%u start %u bus %u early-nack %u@%u\n",
+                   d[0], d[1], d[2], d[3], d[4], d[5]);
+        }
+    }
 
     for (int i = 0; i < g_ev_n; i++) {
         printf("  #%d %s try%d cycle %u flags 0x%02X off %u %u ms\n", i + 1,

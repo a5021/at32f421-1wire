@@ -2,7 +2,7 @@
 
 Updated: 2026-11-27
 
-## Current build (register map 0x04)
+## Current build (register map 0x05)
 
 The I2C priority guard was tested and rejected. A 1 ms whole-manager guard and
 a 50 us guard made short stress runs clean, but both reduced `run quick` to
@@ -14,11 +14,11 @@ transport rate.
 
 | setup | result |
 |-------|--------|
-| `run quick`, production watchdog build | 48/48 PASS |
-| `run quick`, `DIAG_BUILD=1` | 48/48 PASS |
-| `run full`, production | 56/56 PASS |
-| `stress 1000`, 400 kHz, no guard | 1000 good, 4-5 torn, 0 invalid, 0 errors, 1-4 retries across runs |
-| `stress 1000`, 100 kHz, no guard | 1000 good, 17-18 torn, 0 invalid, 0 errors, 0-5 retries across runs |
+| `run quick`, production watchdog build | 47-48/48 across runs; T21/T55 flaky |
+| `run quick`, `DIAG_BUILD=1` | 48/48 before the diagnostic-map bump |
+| `run full`, production | 55-56/56 across runs; T21/T30/T55 flaky |
+| `stress 1000`, 400 kHz, no guard | three runs: 1/6/3 retries, 0 invalid/errors |
+| `stress 1000`, 100 kHz, no guard | 6 retries, 0 invalid/errors |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
 | host tests | 369 checks, 0 failures; Python register-map check passes |
@@ -27,7 +27,15 @@ transport rate.
 Fixes in this build:
 - `STS1` and `STS2` reads that clear `ADDR7F` are adjacent in generated `-O2`
   assembly.
-- Register-map version is `0x04`; the tester reads the shared version constant.
+- Register-map version is `0x05`; the tester reads the shared version constant.
+- Early NACK diagnostics count only `ACKFAIL` after byte 128 and before the
+  last map byte, then record `tx_index`; stress output includes
+  GATE/START/BUS/early-NACK.
+- Three 400 kHz `stress 1000` runs gave validate/early-NACK pairs 1/4, 6/6 and
+  3/2, with early positions 148, 236 and 254. GATE, START and BUS stayed zero.
+  This correlates the 400 kHz failures with the slave observing a NACK inside
+  a long read. The 100 kHz run had 6 validate but zero early NACK, so at least
+  one additional failure class remains.
 - `REG_SELECTED` is latched at STOP with command/speed changes; the latch helper
   and `BRIDGE_MAP_VERSION` have host coverage.
 - Production builds restore SDA-stuck recovery and a 250 ms open-frame

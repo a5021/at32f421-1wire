@@ -3,7 +3,11 @@
 ## Unreleased
 
 ### Changed
-- **Bridge:** register-map version is now `0x04`. `REG_SELECTED` is latched at
+- **Bridge:** register-map version is now `0x05`. Early NACK count/position
+  diagnostics exclude normal final and short-read NACKs, and stress output
+  includes GATE/START/BUS/early-NACK counters. `STRETCH` is programmed before
+  `I2CEN`.
+- **Bridge:** `REG_SELECTED` is latched at
   STOP with command/speed changes, so an aborted write cannot change the active
   scratchpad selection.
 - **Bridge:** production builds restore SDA-stuck recovery and a 250 ms
