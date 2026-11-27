@@ -25,16 +25,19 @@ Canonical description of the I2C slave register file exposed by
 | `0x30..0x3F` | 16 | `REG_TEMP_STATUS` | Per-sensor status (`OW_OK` / error code / `0xFF` invalid) |
 | `0x40..0x47` | 8 | `REG_EEPROM` | Last DS2431 read block |
 | `0x48` | 1 | `REG_EEPROM_STATUS` | DS2431 status (`0x00` = OK, `0xFF` = invalid) |
-| `0x49..0x5F` | 23 | — | Reserved. Not implemented: reads back `0x00` and is covered by the map CRC |
+| `0x49..0x4A` | 2 | `REG_DIAG_GATE*` | STOPF refused during a live transmit: event count and last `tx_index` |
+| `0x4B` | 1 | — | Reserved, reads `0x00`, covered by map CRC |
+| `0x4C..0x4D` | 2 | `REG_DIAG_START/BUS` | STARTF/BUSERR observed while a software frame was open, once per frame |
+| `0x4E..0x5F` | 18 | — | Reserved, reads `0x00`, covered by map CRC |
 | `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters, `4` = pause, `5` = resume (writable) |
 | `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed (writable) |
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
 | `0x63` | 2 | `REG_MAP_CRC` | CRC-16/CCITT over the snapshot, little-endian |
 | `0x65` | 1 | `REG_MGR` | Manager state, `0x80` set while paused (see below) |
 | `0x66..0x6B` | 6 | `REG_STALL*` | Worst and average publish-phase durations, microseconds |
-| `0x6C` | 2 | `REG_DIAG_GAP` | Diagnostic build only: worst interval between `i2c_poll()` calls, us, 16-bit LE. Normally `REG_DIAG_CRC_FFFF` |
-| `0x6D` | 1 | `REG_DIAG_BUSY` | SDA-stuck recoveries performed |
-| `0x6E` | 1 | `REG_DIAG_ACK` | ACK-failure count, modulo 256 |
+| `0x6C` | 1 | `REG_DIAG_CRC_FFFF` | Long reads stopped before byte 250, saturating |
+| `0x6D` | 1 | `REG_DIAG_BUSY` | `tx_index` of the last early STOP |
+| `0x6E` | 1 | `REG_DIAG_ACK` | Reads decoded as writes (more than 8 received bytes), saturating |
 | `0x6F` | 1 | `REG_DIAG_REASON` | Transmit underruns (OUF), saturating |
 | `0x70..0x78` | 9 | `REG_SCRATCH` | Selected DS18B20 scratchpad (9 bytes) |
 | `0x79..0x7A` | 2 | `REG_MAX_STEP` | Worst synchronous manager step, microseconds (LE) |
@@ -92,18 +95,16 @@ the four bytes cannot tear and no seqlock is needed.
 | 0 | `0x01` | `HEALTH_BUSERR` | Illegal START/STOP position seen |
 | 1 | `0x02` | `HEALTH_ARLOST` | Arbitration lost (noise or a second master) |
 | 2 | `0x04` | `HEALTH_OUF` | Transmit underrun: the master clocked before the next byte was loaded |
-| 3 | `0x08` | `HEALTH_SDA_STUCK` | SDA held low for 10 ms with no matched address |
-| 4 | `0x10` | `HEALTH_RECOVERED` | Nine-clock recovery released the bus |
+| 3 | `0x08` | reserved | Automatic SDA-stuck recovery is disabled |
+| 4 | `0x10` | reserved | Automatic bus recovery is disabled |
 
 `ARLOST` has no counter on purpose: with one master it is already a
 pathological event, so the flag is enough and a rate would add nothing.
 
-The flags are sticky. After `HEALTH_SDA_STUCK` the slave disables the I2C
-peripheral, drives nine clocks and a STOP on the pins in open-drain mode,
-then re-initialises the peripheral with the same speed and address. It only
-does this when SDA has been continuously low for 10 ms and no address
-matched in that window, so a live transfer is never disturbed. A low SCL is
-never treated as a fault: that is the slave's own clock stretch.
+The flags are sticky. Automatic SDA-stuck recovery and the 100 ms open-frame
+watchdog are intentionally disabled in this diagnostic build. BUSERR, ARLOST
+and OUF still clear the software frame state and are counted; no code drives
+recovery clocks or reinitialises I2C behind the master's back.
 
 `CMD_CLEAR_COUNTERS` clears the counters, the flags and `REG_FRAMES`.
 `CMD=4` pauses the manager and `CMD=5` resumes it; the pause takes effect in
@@ -125,13 +126,13 @@ rather than silently accepted.
 | 4 | count one extra frame |
 | 5 | drop one frame count |
 | 6 | hold the 1-Wire strong pull-up for the whole frame |
-| 7 | run 64 1-Wire bit slots during the frame |
+| 7 | run 64 1-Wire bit slots during the frame (64 x 165 us = 10.56 ms) |
 | 8 | stall the CPU at byte 64 of the frame for `(REG_SELECTED & 0x0F) * 20` us, minimum 20 us, maximum 300 us |
 
-Codes 4 and 5 give a digital ground truth for the health metric. Code 8
-demonstrates the real failure mode: a CPU stall inside a transfer corrupts
-exactly the byte being transferred (99 of 100 reads, same byte, same bit),
-which is why manager work must stay short.
+Codes 4 and 5 give a digital ground truth for the health metric. Code 8 is a
+latency injection. With clock stretching enabled a 200 us stall did not corrupt
+the read; the remaining failures correlate with PA10 edge activity overlapping
+I2C, so manager work is now kept out of short I2C inter-frame gaps.
 
 ## Map checksum (`REG_MAP_CRC`)
 
@@ -148,6 +149,8 @@ computing the same CRC:
 | `0x02` | `REG_FLAGS`: the busy bit toggles outside `publish()` |
 | `0x08` | `REG_SEQ`: intentionally odd while a publish is in progress |
 | `0x09..0x0F` | health block and `REG_SPEED`, injected at read time |
+| `0x49..0x4A` | live STOPF-gate diagnostics |
+| `0x4C..0x4D` | live STARTF/BUSERR diagnostics |
 | `0x60..0x6F` | command latch, selection, fault, the CRC itself and the live diagnostics |
 | `0x79..0x7F` | worst-step and EEPROM timing counters, live |
 
@@ -160,7 +163,7 @@ guarantees the CRC matches.
 Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`), `REG_SELECTED` (`0x61`) and
 `REG_FAULT` (`0x62`) accept writes. A write is latched at STOP and applied
 when the current transaction finishes; an aborted transfer
-(ACKFAIL/BUSERR/ARLOST/OUF) discards the pending command or speed change.
+(BUSERR/ARLOST/OUF) discards the pending command or speed change.
 
 The health block is read-only. Its values are injected when a byte is
 handed to the master, because `publish()` rebuilds `g_regs` from scratch on

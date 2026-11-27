@@ -70,6 +70,8 @@ static bool map_volatile_index(int i)
     return (i == (int)REG_FLAGS) || (i == (int)REG_SEQ) ||
            ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
            ((i >= (int)REG_CMD) && (i <= (int)REG_DIAG_REASON)) ||
+           ((i >= (int)REG_DIAG_GATE) && (i <= (int)REG_DIAG_GATE_POS)) ||
+           ((i >= (int)REG_DIAG_START) && (i <= (int)REG_DIAG_BUS)) ||
         ((i >= (int)REG_MAX_STEP) && (i <= (int)REG_EEP_POLL));
 }
 
@@ -903,7 +905,6 @@ void suite_stress(void)
     bus_set_speed(BUS_SPEED_400K);
     write_speed(1u);
 }
-
 
 
 

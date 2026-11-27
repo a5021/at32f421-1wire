@@ -38,10 +38,14 @@ extern "C" {
 #define REG_STALL_STATE         0x67u   /* manager state of that call */
 #define REG_STALL_P2            0x68u   /* publish phase 2 max */
 #define REG_STALL_AVG           0x69u   /* publish phase 0/1/2 averages */
-#define REG_DIAG_CRC_FFFF       0x6Cu   /* STOPs that cut a live transmit in two */
-#define REG_DIAG_BUSY           0x6Du   /* tx_index of the last one */
+#define REG_DIAG_CRC_FFFF       0x6Cu   /* long reads stopped before byte 250 */
+#define REG_DIAG_BUSY           0x6Du   /* tx_index of the last early STOP */
 #define REG_DIAG_ACK            0x6Eu   /* reads decoded as writes (>8 bytes) */
 #define REG_DIAG_REASON         0x6Fu   /* transmit underruns (OUF) */
+#define REG_DIAG_GATE           0x49u   /* STOPF refused mid-transmit (live) */
+#define REG_DIAG_GATE_POS       0x4Au   /* tx_index at the last refusal (live) */
+#define REG_DIAG_START          0x4Cu   /* STARTF while a frame was open */
+#define REG_DIAG_BUS            0x4Du   /* BUSERR while a frame was open */
 #define REG_MAX_STEP            0x79u   /* worst manager_poll, us, 16-bit LE */
 #define REG_MAX_STEP_H          0x7Au
 #define REG_MAX_STATE           0x7Bu   /* manager state of that call */
@@ -59,13 +63,13 @@ extern "C" {
 #define FLAG_EEPROM_OK          0x10u
 #define FLAG_TEMP_ERROR         0x20u
 
-/* REG_HEALTH sticky bits.  b0..b2 come from the I2C status flags, b3 from the
- * line monitor, b4 records a successful nine-clock recovery. */
+/* REG_HEALTH sticky bits. b0..b2 come from I2C status flags. b3/b4 are
+ * reserved because automatic bus recovery is disabled. */
 #define HEALTH_BUSERR           0x01u
 #define HEALTH_ARLOST           0x02u
 #define HEALTH_OUF              0x04u
-#define HEALTH_SDA_STUCK        0x08u
-#define HEALTH_RECOVERED        0x10u
+#define HEALTH_SDA_STUCK        0x08u   /* reserved */
+#define HEALTH_RECOVERED        0x10u   /* reserved */
 
 /* REG_FAULT codes: one shot, applied to the next transmitted byte. */
 #define FAULT_BIT_FLIP          1u
@@ -126,8 +130,6 @@ void manager_set_state_for_test(uint32_t state);
 #endif
 
 #endif /* MANAGER_H */
-
-
 
 
 

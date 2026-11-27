@@ -1,6 +1,36 @@
 # Status
 
-Updated: 2026-11-26
+Updated: 2026-11-27
+
+## Current diagnostic build: I2C priority guard
+
+The remaining short-run failures correlated with 1-Wire manager activity:
+paused manager gave 0 retries, active manager did not. LA captures during
+`couple` showed the slave releasing SDA while PA10 was switching; the I2C
+lines had the correct number of SCL edges and no visible SDA edge while SCL
+was high. The official RM V2.05 confirms `BUSERR` means an erroneous START or
+STOP and that `STRETCH=0` enables clock stretching.
+
+`manager_poll()` now runs only after 1 ms with no I2C status/software-frame
+activity. This stops new TMR1+DMA 1-Wire passes from starting in the 1.5-4 us
+gaps between back-to-back I2C transactions. The snapshot pauses under
+continuous I2C polling and resumes when the bus is idle; measured cycle went
+1 -> 2 after traffic stopped.
+
+| setup | result |
+|-------|--------|
+| `stress 500`, 400 kHz | 500 good, 0 torn, 0 invalid, 0 errors, 0 retries (twice) |
+| `stress 2000`, 400 kHz | 2000 good, 0 torn, 0 invalid, 0 errors, 0 retries |
+| `stress 1000`, 100 kHz | 1000 good, 0 torn, 0 invalid, 0 errors, 0 retries |
+| `repeat 0x00 256 2000`, 100 kHz | 2000 good, 0 wbad, 0 rbad |
+| host tests | 337 checks, 0 failures |
+
+Also fixed: `STS1` and `STS2` reads that clear `ADDR7F` are adjacent in the
+generated `-O2` assembly. Automatic SDA-stuck recovery and the 100 ms
+open-frame watchdog are removed in this diagnostic build. `REG_DIAG_START`
+(0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per open frame.
+
+## Historical numbers before the I2C priority guard
 
 ## Decision
 
@@ -25,7 +55,7 @@ Everything built on top of the missing stretch (chunked publish, the 12 us poll
 budget, the address-window theory) stays as it is -- it is correct and cheap --
 but it is no longer what keeps the bus alive.
 
-## Current numbers (400 kHz, 9 devices)
+## Earlier 400 kHz numbers (9 devices)
 
 | setup | result |
 |-------|--------|
@@ -95,14 +125,13 @@ Nothing was wrong on the 1-Wire side.
   trusted `STS2.busyf` -- kept `manager_poll()` from running at all.
 - Fix: `STOPF` and `ACKFAIL` are handled before `TDBE`; `i2c_active()` uses the
   software frame view only (`STS2.busyf` stays set after a mangled frame,
-  measured); a frame still open after 100 ms is retired by `i2c_bus_recover()`
-  and counted in `REG_DIAG_CRC_FFFF`/`REG_DIAG_BUSY`.
-- Do not retire the frame on ACKFAIL alone: with stretching disabled this slave
-  samples the master's ACK late, and dropping `tx_mode` there releases SDA and
-  turns a healthy read into 0xFF.  Tested, reverted.
-- 1-Wire pad drive strength matters more than expected.  `odrvr = 1` (stronger)
-  cost 10-14 corrupted map reads per 3000; `odrvr = 0` (weakest) 4 per 5000.
-  The coupling is the 1-Wire edge, not the strong pull-up.
+  measured). A 100 ms recovery watchdog was tried, then removed: it could cut
+  a healthy frame after a missed STOP and produced the deterministic `0xFF`
+  tails seen in LA captures.
+- Do not retire the frame on ACKFAIL alone. Clock stretching is enabled; the
+  frame is retired by STOPF or the next address match.
+- 1-Wire pad drive strength matters: `odrvr = 1` (stronger) cost 10-14 corrupted
+  map reads per 3000; `odrvr = 0` (weakest) 4 per 5000.
 | setup after the fix | result |
 |-------|--------|
 | `run full` | 54/55, T22 the only failure |
@@ -111,38 +140,31 @@ Nothing was wrong on the 1-Wire side.
 | `stress 3000` at 100 kHz | 3000 good, 16 torn, 0 invalid, 0 errors, 3 retries |
 | cycle | advances 1/s under load, no freeze |
 
-The 0xFF tails were truncations, not bit errors: `retry diff` compares the failed
-map with a later clean read and shows the good bytes from some offset on
-(26, 64, 112, 128, 146, 154 ...), i.e. this slave released SDA in the middle of
-a live read.  A STOP is now trusted only when SDA and SCL are both actually
-high, and `REG_DIAG_CRC_FFFF` counts a STOP that cuts a live transmit with no
-NACK before it: that counter stayed 0 over the runs above, so the flag was not
-being raised early.  What is left is the byte-level class: this slave cannot
-stretch, so any CPU step longer than one bit time at 400 kHz (2.5 us) can lose
-the byte being shifted.  `manager_poll()` is measured at 8 us worst case, three
-bit times, which matches a residual of a few reads in 20 000 and cannot be
-closed without clock stretching or an I2C interrupt that the earlier session
-rejected.
+The `0xFF` tails were truncations: `retry diff` showed valid bytes followed by
+`0xFF` from an arbitrary offset. A STOP was not being raised early. Triggered
+LA captures during `couple` later showed PA10 switching at the truncation
+phase, exact SCL edge counts, and no visible illegal SDA edge. The current
+1 ms I2C quiet guard prevents the manager from starting new 1-Wire passes in
+short inter-frame gaps and removes the short-run retries listed above.
 ## Remaining
-- T22 still fails, but for a different reason than the stall: the cycle sits at
-  2 while `REG_MGR` and `REG_FLAGS` read back 0xFF.  At the end of the map suite
-  the slave answers its address and drives nothing, which is the same all-FF
-  class as the residual stress retries, not a manager stall.  Outside the suite
-  `watch cycle` advances once per second.
-- The review has open items that are not transport errors: a normal read NACK
-  clears `pending_cmd`/`pending_speed` and drops both modes,
-  `i2c_apply_speed()` switches the peripheral off from the STOP path, and TRISE
-  is clamped to 63 at 100 kHz because the field is 6 bits wide.
+- `run full` has not been rerun after the 1 ms guard. T22/T42 need rechecking;
+  the manager now resumes after 1 ms idle, but continuous map reads deliberately
+  pause new 1-Wire work.
+- The guard prevents new passes during back-to-back I2C traffic. A pass already
+  in flight when an unpredictable I2C master starts can still overlap PA10 with
+  I2C; hardware isolation on PA10 remains the complete fix for that case.
+- Review items that are not transport errors: `i2c_apply_speed()` switches the
+  peripheral off from the STOP path, and TRISE is clamped to 63 at 100 kHz
+  because the field is 6 bits wide.
 
 ## Next
 
-1. Keep the one-sensor setup as the reference configuration: it is the first
-   configuration that passes the stress verdict.
-2. If the 9-device cable is still wanted: add series resistors at the far end
-   and shorten the I2C run, then repeat the 3-run comparison.
-3. Decide the acceptance budget: 0 delivered errors with <=1 retry per 20 000
-   reads, or a strict zero.  Current data argues the strict zero is not a
-   property of this slave.
+1. Rerun `run full` after the 1 ms guard, especially T21/T22/T42.
+2. Keep short acceptance runs at 400 kHz and 100 kHz; only then repeat a longer
+   `stress` run.
+3. For I2C masters that can start during an already-running 1-Wire pass, add a
+   100-220 ohm series resistor on PA10 near the MCU or separate the PA10 trace
+   and ground return from SDA/SCL. The guard cannot predict that arrival.
 
 Tried and useless: 100 uF on the 3.3 V rail (7/8/7 retries) and lowering the
 1-Wire DMA priority to low (4/10/4, inside the run-to-run spread).  Both were
@@ -209,10 +231,16 @@ e9ba176).
   publish/read slicing: measured worse than e9ba176.
 - `DT` preload at STOP or before ADDR clear: ignored by the peripheral.
 - Manager steps inside the I2C burst: first-byte errors rose to 2%.
-- Transmit underrun (`OUF`) as the cause of the 0xFF tails: this rejection was
-  wrong.  It rested on the poll gap (12 us of 22.5) and on "no SCL stretching,
-  so the slave was never late" -- the stretching was missing *because*
-  `CTRL1.stretch = 1` disables it, and the underrun was the real cause of the
-  tails.  See the Decision above; the chunked commit was a second, independent
-  defect that P3 removed.
+- Transmit underrun (`OUF`) as the cause of the current `0xFF` tails: rejected.
+  OUF stayed zero in the captured failures and clock stretching is enabled.
+  The earlier missing-stretch defect was real, but it is separate from the
+  PA10-overlap failures addressed by the I2C priority guard.
+- 100 ms open-frame watchdog: removed. It recovered stale `tx_mode`, but could
+  also cut a healthy frame after a missed STOP; LA showed deterministic `0xFF`
+  tails at the recovery phase.
+- Early BUSERR clear without frame teardown: did not remove CRC failures in
+  short `couple` runs. Reverted to the normal handler order.
+- "The residual errors happen because this slave cannot stretch": wrong. The
+  official RM confirms `STRETCH=0` enables stretching, and a 200 us stall did
+  not corrupt reads. The remaining correlation is PA10 edge activity.
 

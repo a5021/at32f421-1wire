@@ -12,6 +12,7 @@
 #define I2C_ADDR7               0x42u
 #define I2C_OADDR1              ((uint16_t)(I2C_ADDR7 << 1))
 
+#define STS1_STARTF             0x00000001u
 #define STS1_ADDR7F             0x00000002u
 #define STS1_STOPF              0x00000010u
 #define STS1_RDBF               0x00000040u
@@ -26,8 +27,6 @@ extern volatile uint32_t g_i2c_speed;
 
 extern uint8_t g_regs[256];
 extern uint32_t pub_phase_max[3];
-static uint8_t diag_ack;
-static uint8_t diag_recoveries;
 static uint8_t diag_ouf_count;
 static uint8_t diag_ouf_pos;
 static uint8_t diag_ouf_ptr;
@@ -57,10 +56,6 @@ static uint8_t forced_pullup;       /* we turned the strong pull-up on */
 static uint8_t fault_edges;         /* 1-Wire burst during the next frame */
 static uint8_t stall_armed;         /* stall once at byte 64 of the read */
 static uint16_t tx_index;           /* transmitted bytes in this frame */
-/* Diagnostic: a STOP that arrives while a transmit still has bytes left means
- * the master's read ended early; the rest of the map reads as 0xFF. */
-static uint8_t  diag_abort_cnt;
-static uint8_t  diag_abort_pos;     /* tx_index of the last aborted frame */
 
 static const uint8_t fault_pulses[65] = {
     5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
@@ -90,43 +85,31 @@ static uint8_t  g_err_bus;          /* saturated BUSERR count */
 static volatile uint32_t max_cycles;/* worst manager_poll duration */
 static uint8_t  max_state;          /* state during that call */
 static uint32_t cycles_per_us = 120u;   /* measured at boot */
-static uint32_t i2c_gap_max;            /* worst cycles between i2c_poll calls */
-static uint32_t i2c_poll_last;          /* CYCCNT of the previous i2c_poll call */
-static uint16_t i2c_gap_latch;          /* last value handed to the host, us */
+static uint32_t last_i2c_cycles;        /* last observed I2C activity */
+#define I2C_MANAGER_GUARD_US     1000u
 
 static uint32_t g_ms;               /* 1 ms tick, polled from SysTick */
 static uint32_t g_scl_hz = 100000u; /* timing currently programmed */
-static uint32_t sda_low_since;
-static uint32_t last_recovery_ms;
-static uint32_t last_frame_ms;
-static bool     sda_low_seen;
 
 #define SDA_BIT                 0x00000002u
 #define SCL_BIT                 0x00000001u
-#define STUCK_MS                10u
-#define RECOVERY_RETRY_MS       100u
-#define BUS_FRAME_TIMEOUT_MS    100u
 
-/* Why a frame ended early: latched at i2c_stop_done() when the transmit was
- * still running. 0x6C = tx_index, 0x6D = the STS1 bits still set there
- * (b0 ADDR7F, b1 STOPF, b2 TDBE, b3 ACKFAIL, b4 BUSERR, b5 ARLOST, b6 OUF,
- * b7 RDBF).  0x6F counts the events. */
+/* Long-read STOP diagnostic: 0x6C counts STOPs before byte 250; 0x6D stores
+ * the last tx_index. */
 static uint8_t  diag_abort_cnt;
 static uint8_t  diag_abort_pos;     /* tx_index of the last aborted frame */
-static uint8_t  saw_ackfail;        /* the current frame was NACKed */
-/* A software frame left open blocks manager_poll() by design, so a latch is
- * kept of every episode that outlived 50 ms, with what was pending there. */
 /* A write transaction is one or two bytes (register pointer, value).  More
  * than that in rx_mode means a read address was decoded as a write: the slave
  * then ACKs and drives nothing, so the master reads the whole block as 0xFF
  * with no I2C error anywhere. */
 static uint16_t rx_bytes;
 static uint8_t  diag_misdecode;
-static uint8_t  diag_starve_cnt;
-static uint8_t  diag_starve_bits;
-static uint32_t starve_since_ms;
-static bool     starve_on;
-static bool     starve_latched;
+static uint8_t  diag_gate_cnt;      /* STOPF refused while tx_mode was set */
+static uint8_t  diag_gate_pos;      /* tx_index at the last refused STOPF */
+static uint8_t  diag_start_cnt;     /* STARTF seen while a frame was open */
+static uint8_t  diag_bus_cnt;       /* BUSERR seen while a frame was open */
+static uint8_t  diag_start_latched;
+static uint8_t  diag_bus_latched;
 
 static uint8_t sat_inc(uint8_t v)
 {
@@ -240,6 +223,14 @@ static uint8_t reg_byte(uint32_t addr)
         return diag_misdecode;
     case REG_DIAG_REASON:
         return diag_ouf_count;
+    case REG_DIAG_GATE:
+        return diag_gate_cnt;
+    case REG_DIAG_GATE_POS:
+        return diag_gate_pos;
+    case REG_DIAG_START:
+        return diag_start_cnt;
+    case REG_DIAG_BUS:
+        return diag_bus_cnt;
     case REG_MAX_STEP: {
         uint32_t us = max_cycles / cycles_per_us;
 
@@ -294,8 +285,19 @@ static void health_clear(void)
     fault_edges = 0u;
     stall_armed = 0u;
     tx_index = 0u;
-    i2c_gap_max = 0u;
-    i2c_poll_last = DWT->CYCCNT;
+    rx_bytes = 0u;
+    diag_misdecode = 0u;
+    diag_abort_cnt = 0u;
+    diag_abort_pos = 0u;
+    diag_ouf_count = 0u;
+    diag_ouf_pos = 0u;
+    diag_ouf_ptr = 0u;
+    diag_gate_cnt = 0u;
+    diag_gate_pos = 0u;
+    diag_start_cnt = 0u;
+    diag_bus_cnt = 0u;
+    diag_start_latched = 0u;
+    diag_bus_latched = 0u;
 }
 
 static void fault_apply(uint8_t code)
@@ -422,124 +424,6 @@ static void spin_us(uint32_t us)
 /* Nine clocks and a STOP free a slave that was left mid-byte.  Called only
  * after SDA has been idle-low for STUCK_MS with SCL high, so the master
  * cannot be talking: driving the pins here is safe. */
-static void i2c_bus_recover(void)
-{
-    I2C2->ctrl1_bit.i2cen = 0;
-
-    /* Both pins to open-drain GPIO output.  cfgr holds the mode field per pin
-     * ([1:0] PA0, [3:2] PA1) and 01 is output: 0x66 left PA0 in alternate
-     * function, so the clocks below never reached the pad.  omode=1 is
-     * open-drain, odt is the level. */
-    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000005u;
-    GPIOA->omode |= 0x00000003u;
-    GPIOA->odt |= (SDA_BIT | SCL_BIT);
-    spin_us(5u);
-
-    {
-        bool scl_ok = true;
-
-        for (int i = 0; i < 9; i++) {
-            GPIOA->odt &= ~SCL_BIT;
-            spin_us(5u);
-            GPIOA->odt |= SCL_BIT;
-            spin_us(5u);
-            /* Nobody may hold SCL down: if the pad still reads low after the
-             * release, the clocks are not reaching the bus and the STOP below
-             * would be meaningless. */
-            if ((GPIOA->idt & SCL_BIT) == 0u) {
-                scl_ok = false;
-                break;
-            }
-        }
-
-        if (scl_ok) {
-            GPIOA->odt &= ~SDA_BIT;     /* STOP: SDA low, SCL high, SDA high */
-            spin_us(5u);
-            GPIOA->odt |= SCL_BIT;
-            spin_us(5u);
-            GPIOA->odt |= SDA_BIT;
-            spin_us(5u);
-        }
-    }
-
-    GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x0000000Au;
-    GPIOA->omode |= 0x00000003u;
-
-    i2c_hw_init();
-
-    reg_ptr = 0u;
-    rx_mode = 0u;
-    tx_mode = 0u;
-    first_byte = 0u;
-    pending_cmd = 0u;
-    pending_speed = -1;
-    fault_next = 0u;
-    fault_pending = 0u;
-    fault_drop_frame = 0u;
-    fault_current = 0u;
-    if (forced_pullup != 0u) {
-        forced_pullup = 0u;
-        ow_hal_strong_pullup(false);
-    }
-    fault_edges = 0u;
-    stall_armed = 0u;
-    tx_index = 0u;
-    sda_low_seen = false;
-    last_recovery_ms = g_ms;
-    last_frame_ms = g_ms;
-
-    if ((GPIOA->idt & SDA_BIT) != 0u) {
-        g_health |= HEALTH_RECOVERED;
-    }
-}
-
-/* SDA held low outside any transaction means somebody, most likely this slave
- * after an aborted byte, still owns the bus.  STS2.busy is useless here
- * because a master pulling SDA low is decoded as a START, so the evidence is
- * SDA low with SCL idle-high for STUCK_MS.  SCL must be checked: while the
- * master is clocking, SDA legitimately stays low for many bit times, and
- * recovering in that window tears the transfer apart. */
-static void bus_health_poll(void)
-{
-    /* A matched address this recently proves the bus is alive, so restart the
-     * timer.  tx_mode is deliberately not consulted: a peripheral left
-     * transmitting would otherwise block recovery forever. */
-    if ((g_ms - last_frame_ms) < STUCK_MS) {
-        sda_low_seen = false;
-        return;
-    }
-
-    if ((GPIOA->idt & SDA_BIT) != 0u) {
-        sda_low_seen = false;
-        return;
-    }
-
-    if (!sda_low_seen) {
-        sda_low_seen = true;
-        sda_low_since = g_ms;
-        return;
-    }
-
-    if ((GPIOA->idt & SCL_BIT) == 0u) {
-        /* Master is clocking: not stuck, start the window again. */
-        sda_low_seen = false;
-        return;
-    }
-
-    if ((g_ms - sda_low_since) < STUCK_MS) {
-        return;
-    }
-    if ((g_ms - last_recovery_ms) < RECOVERY_RETRY_MS) {
-        return;
-    }
-
-    if (diag_recoveries != 0xFFu) {
-        diag_recoveries++;
-    }
-    g_health |= HEALTH_SDA_STUCK;
-    i2c_bus_recover();
-}
-
 /* Hand one snapshot byte to the master, applying a one-shot injected fault.
  * Both the address-match byte and the TDBE byte go through here, otherwise a
  * one-byte read would never see the fault. */
@@ -575,26 +459,22 @@ static void i2c_send_byte(void)
  * address match: a stale STOP must never apply a command to the wrong
  * transaction. */
 static void i2c_stop_done(void){
-    if ((rx_mode != 0u) && (rx_bytes > 8u)) {
-        if (diag_misdecode != 0xFFu) {
-            diag_misdecode++;
-        }
-    }
-    /* A STOP that arrives while a transmit is still running, and with no NACK
-     * before it, is the truncation signature: the master was still clocking
-     * data out, so the rest of its read becomes 0xFF. */
-    if ((tx_mode != 0u) && (saw_ackfail == 0u) && (tx_index > 4u)) {
+    /* Long map reads end at byte 256. A STOP between bytes 16 and 249 is an
+     * early termination. Do not gate this diagnostic on ACKFAIL: ACKFAIL can
+     * be stale or sampled late while this slave is being clocked. */
+    if ((tx_mode != 0u) && (tx_index >= 16u) && (tx_index < 250u)) {
         if (diag_abort_cnt != 0xFFu) {
             diag_abort_cnt++;
         }
         diag_abort_pos = (uint8_t)tx_index;
     }
-    saw_ackfail = 0u;
     (void)I2C2->sts1;
     I2C2->ctrl1_bit.i2cen = 1;
     rx_mode = 0u;
     tx_mode = 0u;
     first_byte = 0u;
+    diag_start_latched = 0u;
+    diag_bus_latched = 0u;
 
     if (forced_pullup != 0u) {
         forced_pullup = 0u;
@@ -633,16 +513,25 @@ static void i2c_poll(void)
 {
     uint32_t sts1;
     uint32_t relevant;
-    uint32_t now = DWT->CYCCNT;
-    uint32_t gap = now - i2c_poll_last;
-
-    i2c_poll_last = now;
-    if (gap > i2c_gap_max) {
-        i2c_gap_max = gap;
-    }
 
     sts1 = I2C2->sts1;
     relevant = sts1 & ~STS1_TDBE;
+    if ((relevant != 0u) || (tx_mode != 0u) || (rx_mode != 0u)) {
+        last_i2c_cycles = DWT->CYCCNT;
+    }
+
+    /* STARTF and BUSERR are diagnostic only here. Count each flag once per
+     * software frame; the normal handlers below clear them. */
+    if ((tx_mode != 0u) || (rx_mode != 0u)) {
+        if (((sts1 & STS1_STARTF) != 0u) && !diag_start_latched) {
+            diag_start_cnt = sat_inc(diag_start_cnt);
+            diag_start_latched = 1u;
+        }
+        if (((sts1 & STS1_BUSERR) != 0u) && !diag_bus_latched) {
+            diag_bus_cnt = sat_inc(diag_bus_cnt);
+            diag_bus_latched = 1u;
+        }
+    }
 
     /* An underrun has to be handled before another byte is served, otherwise
      * the recorded position belongs to a later frame. */
@@ -664,41 +553,13 @@ static void i2c_poll(void)
     }
 
     if ((sts1 & STS1_ACKFAIL) != 0u) {
-        /* AF is set when the master NACKs, but also when this slave samples
-         * the ACK late, which is exactly what a slave with clock stretching
-         * disabled risks: it is not proof that the master stopped reading.
-         * The frame is therefore NOT retired here; dropping tx_mode would
-         * release SDA and turn the rest of a healthy read into 0xFF (measured:
-         * truncation at arbitrary offsets, 229 FF bytes at the tail).  Only
-         * the stopped-frame watchdog in the main loop retires a frame that is
-         * really over. */
-        if (tx_mode != 0u) {
-            saw_ackfail = 1u;
-        }
+        /* ACKFAIL alone is not proof that the master stopped reading; retain
+         * tx_mode until STOPF or a new address match retires this frame. */
         g_i2c_err_ack++;
-        diag_ack = (uint8_t)g_i2c_err_ack;
         I2C2->sts1 = (uint32_t)~(STS1_ACKFAIL & 0x0000DF00u);
     }
 
     if ((relevant == 0u) && (tx_mode == 0u)) {
-        return;
-    }
-
-    /* A finished frame must be retired before another byte is queued.  The
-     * master's NACK on the last byte leaves ACKFAIL, TDBE and STOPF set at the
-     * same time; serving TDBE first swallowed the STOP for the whole frame
-     * (measured: STS2.busyf and tx_mode stayed set, i2c_active() kept the
-     * manager from ever being polled again, and the cycle counter froze). */
-    if ((sts1 & STS1_STOPF) != 0u) {
-        /* A STOP means the master released the bus: SDA is high while SCL is
-         * high.  This slave has been seen to latch STOPF while the master was
-         * still clocking data out (a truncated map read, 0xFF from an arbitrary
-         * offset, always with no NACK before it), so the flag alone is not
-         * trusted while a transmit is in flight. */
-        if (((GPIOA->idt & (SDA_BIT | SCL_BIT)) == (SDA_BIT | SCL_BIT)) ||
-            (tx_mode == 0u)) {
-            i2c_stop_done();
-        }
         return;
     }
 
@@ -712,19 +573,13 @@ static void i2c_poll(void)
         }
 
         (void)I2C2->sts1;
-        /* Retire flags left by the previous frame.  The normal NACK at the end
-         * of a read sets ACKFAIL, and a bus error can be latched after the
-         * last poll; serviced only in the tail handler they would instead tear
-         * down the frame that is starting now, because the address branch
-         * returns before that handler runs.  Measured: truncated map reads
-         * started at arbitrary offsets with an intact sequence counter. */
+        sts2 = I2C2->sts2;
+        /* Retire flags left by the previous frame. BUSERR and ARLOST are
+         * serviced here because the address branch returns before the tail
+         * handler. ACKFAIL was already handled at the top of this call. */
         {
             uint32_t stale = sts1 & (STS1_ACKFAIL | STS1_BUSERR | STS1_ARLOST);
 
-            if ((stale & STS1_ACKFAIL) != 0u) {
-                g_i2c_err_ack++;
-                diag_ack = (uint8_t)g_i2c_err_ack;
-            }
             if ((stale & STS1_BUSERR) != 0u) {
                 g_i2c_err_bus++;
                 g_err_bus = sat_inc(g_err_bus);
@@ -738,14 +593,9 @@ static void i2c_poll(void)
                 I2C2->sts1 = (uint32_t)~(stale & 0x0000DF00u);
             }
         }
-        /* Direction must be sampled after the STOP is retired.  Sampled
-         * before, it can still describe the previous frame: a write (the
-         * register-pointer write) followed by a read then decodes as a write,
-         * the slave never loads DT, and the master reads a whole frame of
-         * 0xFF with the address happily ACKed. */
-        sts2 = I2C2->sts2;
+        /* Direction was sampled immediately after the STS1 read that clears
+         * ADDRF. Do not move that read below the stale-flag writes above. */
         g_frames++;                 /* one matched address = one transaction */
-        last_frame_ms = g_ms;
         if (fault_drop_frame != 0u) {
             g_frames--;
             fault_drop_frame = 0u;
@@ -753,11 +603,12 @@ static void i2c_poll(void)
         /* Direction first: the master starts shifting the first byte within
          * about one SCL bit time of the address match, and the slave loses the
          * MSB if DT is not loaded by then. */
+        diag_start_latched = 0u;
+        diag_bus_latched = 0u;
         if ((sts2 & STS2_DIRF) != 0u) {
             tx_mode = 1;
             rx_mode = 0;
-                    tx_index = 0u;
-            saw_ackfail = 0u;
+            tx_index = 0u;
             tx_map = manager_map();     /* one snapshot for the whole frame */
             i2c_send_byte();
         } else {
@@ -774,9 +625,28 @@ static void i2c_poll(void)
         }
         if (fault_edges != 0u) {
             fault_edges = 0u;
-            ow_hal_feed(fault_pulses, 64u); /* 64 slots ~ 640 us of edges */
+            ow_hal_feed(fault_pulses, 64u); /* 64 slots x 165 us = 10.56 ms */
         }
-        sda_low_seen = false;
+        return;
+    }
+
+    /* No address match pending: retire a STOP.  A STOP is only acted on when
+     * the bus really is released, otherwise a spurious flag would cut a live
+     * transmit in half.  When the master has already addressed us again, the
+     * address branch above retires the old frame unconditionally: the next
+     * transaction has usually started by the time this is polled, so requiring
+     * an idle bus there would leave tx_mode set forever and starve the
+     * manager (measured: 401k transactions, REG_FRAMES never advanced). */
+    if ((sts1 & STS1_STOPF) != 0u) {
+        if (((GPIOA->idt & (SDA_BIT | SCL_BIT)) == (SDA_BIT | SCL_BIT)) ||
+            (tx_mode == 0u)) {
+            i2c_stop_done();
+        } else {
+            if (diag_gate_cnt != 0xFFu) {
+                diag_gate_cnt++;
+            }
+            diag_gate_pos = (uint8_t)tx_index;
+        }
         return;
     }
 
@@ -864,51 +734,24 @@ int main(void)
 
     manager_init();
 
-    i2c_poll_last = DWT->CYCCNT;
     tx_map = manager_map();
+    last_i2c_cycles = DWT->CYCCNT;
 
     for (;;) {
         timebase_poll();
-        bus_health_poll();
         i2c_poll();
-        if (!i2c_active()) {
+        if (!i2c_active() &&
+            ((DWT->CYCCNT - last_i2c_cycles) >
+             (I2C_MANAGER_GUARD_US * cycles_per_us))) {
             uint8_t st = (uint8_t)(manager_state_reg() & 0x0Fu);
             uint32_t t0 = DWT->CYCCNT;
 
-            starve_on = false;
-            starve_latched = false;
             manager_poll();
             uint32_t d = DWT->CYCCNT - t0;
 
             if (d > max_cycles) {
                 max_cycles = d;
                 max_state = st;         /* state the call started in */
-            }
-        } else {
-            if (!starve_on) {
-                starve_on = true;
-                starve_since_ms = g_ms;
-            } else if (!starve_latched &&
-                       ((g_ms - starve_since_ms) > BUS_FRAME_TIMEOUT_MS)) {
-                /* A frame that is still open after this long is broken: the
-                 * longest legal transaction here is 256 bytes at 50 kHz, about
-                 * 46 ms.  The STOP that should have retired it was never
-                 * flagged, so retire it here instead of starving the manager
-                 * for as long as the slave stays powered. */
-                starve_latched = true;
-                if (diag_starve_cnt != 0xFFu) {
-                    diag_starve_cnt++;
-                }
-                diag_starve_bits = (uint8_t)(
-                    ((tx_mode != 0u) ? 0x40u : 0u) |
-                    ((rx_mode != 0u) ? 0x20u : 0u) |
-                    (((I2C2->sts2 & 0x00000002u) != 0u) ? 0x80u : 0u) |
-                    (((I2C2->sts1 & STS1_TDBE) != 0u) ? 0x01u : 0u) |
-                    (((I2C2->sts1 & STS1_STOPF) != 0u) ? 0x02u : 0u) |
-                    (((I2C2->sts1 & STS1_ADDR7F) != 0u) ? 0x04u : 0u) |
-                    (((I2C2->sts1 & STS1_ACKFAIL) != 0u) ? 0x08u : 0u));
-                g_health |= HEALTH_BUSERR;
-                i2c_bus_recover();
             }
         }
     }
@@ -923,16 +766,6 @@ void HardFault_Handler(void)
 void MemManage_Handler(void) __attribute__((alias("HardFault_Handler")));
 void BusFault_Handler(void) __attribute__((alias("HardFault_Handler")));
 void UsageFault_Handler(void) __attribute__((alias("HardFault_Handler")));
-
-
-
-
-
-
-
-
-
-
 
 
 

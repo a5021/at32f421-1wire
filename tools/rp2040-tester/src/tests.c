@@ -16,6 +16,8 @@ uint16_t map_crc16(const uint8_t *map)
         if ((i == (int)REG_FLAGS) || (i == (int)REG_SEQ) ||
             ((i >= (int)REG_FRAMES) && (i <= (int)REG_SPEED)) ||
             ((i >= (int)REG_CMD) && (i <= (int)REG_DIAG_REASON)) ||
+            ((i >= (int)REG_DIAG_GATE) && (i <= (int)REG_DIAG_GATE_POS)) ||
+            ((i >= (int)REG_DIAG_START) && (i <= (int)REG_DIAG_BUS)) ||
             ((i >= (int)REG_MAX_STEP) && (i <= (int)REG_EEP_POLL))) {
             continue;
         }
@@ -207,7 +209,6 @@ bool map_validate(const uint8_t *map, char *why, size_t why_len)
     return true;
 #undef REJECT
 }
-
 
 
 

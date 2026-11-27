@@ -37,6 +37,10 @@
 #define REG_DIAG_BUSY           0x6Du
 #define REG_DIAG_ACK            0x6Eu
 #define REG_DIAG_REASON         0x6Fu
+#define REG_DIAG_GATE           0x49u
+#define REG_DIAG_GATE_POS       0x4Au
+#define REG_DIAG_START          0x4Cu
+#define REG_DIAG_BUS            0x4Du
 #define REG_MAX_STEP            0x79u
 #define REG_MAX_STEP_H          0x7Au
 #define REG_MAX_STATE           0x7Bu
@@ -98,7 +102,6 @@
 #define INVALID_TEMP            0x8000
 
 #endif /* TESTER_REGMAP_H */
-
 
 
 
