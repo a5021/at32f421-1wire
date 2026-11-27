@@ -71,6 +71,7 @@ extern "C" {
 #define HEALTH_OUF              0x04u
 #define HEALTH_SDA_STUCK        0x08u   /* production: SDA stuck recovery */
 #define HEALTH_RECOVERED        0x10u   /* production: recovery completed */
+#define HEALTH_RECOVERY_FAILED  0x20u   /* production: SCL/SDA not released */
 
 /* REG_FAULT codes: one shot, applied to the next transmitted byte. */
 #define FAULT_BIT_FLIP          1u

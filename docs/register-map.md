@@ -96,16 +96,20 @@ the four bytes cannot tear and no seqlock is needed.
 | 1 | `0x02` | `HEALTH_ARLOST` | Arbitration lost (noise or a second master) |
 | 2 | `0x04` | `HEALTH_OUF` | Transmit underrun: the master clocked before the next byte was loaded |
 | 3 | `0x08` | `HEALTH_SDA_STUCK` | Production build: SDA held low for 10 ms with no matched address |
-| 4 | `0x10` | `HEALTH_RECOVERED` | Production build: nine-clock recovery released the bus |
+| 4 | `0x10` | `HEALTH_RECOVERED` | Production build: nine-clock recovery released SDA and SCL |
+| 5 | `0x20` | `HEALTH_RECOVERY_FAILED` | Production build: SCL or SDA remained low after recovery |
 
 `ARLOST` has no counter on purpose: with one master it is already a
 pathological event, so the flag is enough and a rate would add nothing.
 
 The flags are sticky. Production builds enable SDA-stuck recovery and a
-250 ms open-frame watchdog. The watchdog uses the last address-match time, so
-it does not cut a legal transfer, and recovers even if the vanished master
-left SCL or SDA low. `DIAG_BUILD=1` disables both mechanisms and leaves bits
-3/4 clear.
+250 ms open-frame watchdog. The SDA detector ignores frames where the slave is
+waiting for received data or still has queued transmit data, so a legal master
+pause between bytes is not treated as a fault. The watchdog uses the last
+address-match time and recovers even if the vanished master left SCL/SDA low.
+Recovery reports success only when all nine SCL pulses reached the pad and both
+lines finish high; otherwise `HEALTH_RECOVERY_FAILED` is set. `DIAG_BUILD=1`
+disables both mechanisms and leaves bits 3..5 clear.
 
 `CMD_CLEAR_COUNTERS` clears the counters, the flags and `REG_FRAMES`.
 `CMD=4` pauses the manager and `CMD=5` resumes it; the pause takes effect in

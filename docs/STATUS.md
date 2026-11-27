@@ -31,7 +31,9 @@ Fixes in this build:
 - `REG_SELECTED` is latched at STOP with command/speed changes; the latch helper
   and `BRIDGE_MAP_VERSION` have host coverage.
 - Production builds restore SDA-stuck recovery and a 250 ms open-frame
-  watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy.
+  watchdog. `DIAG_BUILD=1` disables both; T46 accepts either policy. Recovery
+  reports `HEALTH_RECOVERED` only when SCL and SDA both finish high, otherwise
+  `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting for data.
 - T22 now observes for 5 s instead of 2 s; it still rejects cycle jumps and
   non-monotonic values.
 - `REG_DIAG_START` (0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per

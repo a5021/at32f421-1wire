@@ -432,8 +432,11 @@ static void spin_us(uint32_t us)
 /* Nine clocks and a STOP free a slave left mid-byte. The caller must prove
  * the master stopped talking: either no address arrived for the open-frame
  * timeout, or SDA has been stuck low with SCL high for STUCK_MS. */
-static void i2c_bus_recover(void)
+static bool i2c_bus_recover(void)
 {
+    bool scl_ok = true;
+    bool recovered;
+
     I2C2->ctrl1_bit.i2cen = 0;
     GPIOA->cfgr = (GPIOA->cfgr & ~0x0000000Fu) | 0x00000005u;
     GPIOA->omode |= 0x00000003u;
@@ -441,8 +444,6 @@ static void i2c_bus_recover(void)
     spin_us(5u);
 
     {
-        bool scl_ok = true;
-
         for (int i = 0; i < 9; i++) {
             GPIOA->odt &= ~SCL_BIT;
             spin_us(5u);
@@ -490,14 +491,31 @@ static void i2c_bus_recover(void)
     sda_low_seen = false;
     last_recovery_ms = g_ms;
     last_frame_ms = g_ms;
-    if ((GPIOA->idt & SDA_BIT) != 0u) {
+
+    recovered = scl_ok &&
+                ((GPIOA->idt & (SDA_BIT | SCL_BIT)) == (SDA_BIT | SCL_BIT));
+    if (recovered) {
         g_health |= HEALTH_RECOVERED;
+    } else {
+        g_health |= HEALTH_RECOVERY_FAILED;
     }
+    return recovered;
 }
 
 static void bus_health_poll(void)
 {
+    uint32_t sts1 = I2C2->sts1;
+
     if ((g_ms - last_frame_ms) < STUCK_MS) {
+        sda_low_seen = false;
+        return;
+    }
+    /* Do not mistake a master pause between bytes for stuck SDA. When the
+     * slave is waiting for received data, or still has data queued for transmit,
+     * static SDA/SCL levels are a legal paused frame. The dangerous case is the
+     * peripheral owing a byte (TDBE/RDBF set) while SCL is nevertheless high. */
+    if ((rx_mode && ((sts1 & STS1_RDBF) == 0u)) ||
+        (tx_mode && ((sts1 & STS1_TDBE) == 0u))) {
         sda_low_seen = false;
         return;
     }

@@ -7,7 +7,9 @@
   STOP with command/speed changes, so an aborted write cannot change the active
   scratchpad selection.
 - **Bridge:** production builds restore SDA-stuck recovery and a 250 ms
-  open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics.
+  open-frame watchdog. `DIAG_BUILD=1` disables both for diagnostics. Recovery
+  now requires both SCL and SDA high and reports `HEALTH_RECOVERY_FAILED`
+  otherwise; the SDA detector ignores frames waiting for data.
 - **Bridge:** I2C quiet-guard experiments were removed. They made short stress
   runs clean but broke manager concurrency (`run quick` 32-34/48); the no-guard
   baseline is 48/48 after widening T22 to a 5 s observation window.
