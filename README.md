@@ -7,7 +7,7 @@ AT32F421F8P7 (Cortex-M4, 64K flash, 16K SRAM, TSSOP20).
 
 | Signal | Pin | Notes |
 |--------|-----|-------|
-| 1-Wire bus | PA10 | TMR1_CH3, MUX 2, open-drain + 4.7k pull-up |
+| 1-Wire bus | PA10 | TMR1_CH3, MUX 2, open-drain + 4.7k pull-up; 93 ohm series resistor at MCU |
 | Strong pull-up | PA10 | push-pull output of the same pin (no MOSFET) |
 | I2C2 SCL | PA0 | MUX 4, open-drain, external pull-up |
 | I2C2 SDA | PA1 | MUX 4, open-drain, external pull-up |
