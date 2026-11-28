@@ -35,6 +35,20 @@ static int mock_reset_count(void)
     return n;
 }
 
+static int mock_strong_true_count(void)
+{
+    int n = 0;
+    int count = mock_event_count();
+    const mock_event_t *events = mock_events();
+
+    for (int i = 0; i < count; i++) {
+        if ((events[i].kind == MOCK_EV_STRONG) && (events[i].a != 0u)) {
+            n++;
+        }
+    }
+    return n;
+}
+
 void test_manager_run(void)
 {
     /* A command latched while the manager is waiting and the delay has
@@ -109,4 +123,31 @@ void test_manager_run(void)
         TF_CHECK_EQ(old_map[REG_DEVICES], manager_map()[REG_DEVICES]);
         TF_CHECK_MEM(&old_map[REG_ROMS], &manager_map()[REG_ROMS], 16u);
     }
+
+    /* External power is detected with Read Power Supply, so conversion must
+     * not engage the PA10 strong pull-up. */
+    mock_reset();
+    (void)mock_add(MOCK_DS18B20, rom);
+    mock_dev(0)->parasite = false;
+    manager_init();
+    mock_set_busy_ticks(0);
+    TF_CHECK(pump_until_state(MGR_WAIT));
+    TF_CHECK(!(manager_map()[REG_FLAGS] & FLAG_BUS_PARASITE));
+    TF_CHECK_EQ(0, mock_strong_true_count());
+
+    /* A parasite-powered bus keeps the strong pull-up and publishes the mode. */
+    mock_reset();
+    (void)mock_add(MOCK_DS18B20, rom);
+    manager_init();
+    mock_set_busy_ticks(0);
+    TF_CHECK(pump_until_state(MGR_WAIT));
+    TF_CHECK(manager_map()[REG_FLAGS] & FLAG_BUS_PARASITE);
+    TF_CHECK(mock_strong_true_count() > 0);
+
+    /* No DS18B20 means no parasite-power flag. */
+    mock_reset();
+    manager_init();
+    mock_set_busy_ticks(0);
+    TF_CHECK(pump_until_state(MGR_WAIT));
+    TF_CHECK(!(manager_map()[REG_FLAGS] & FLAG_BUS_PARASITE));
 }

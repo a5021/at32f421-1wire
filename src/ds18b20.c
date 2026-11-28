@@ -8,6 +8,7 @@
 #define DS18B20_CMD_SKIP_ROM    0xCCu
 #define DS18B20_CMD_CONVERT_T   0x44u
 #define DS18B20_CMD_READ_SP     0xBEu
+#define DS18B20_CMD_READ_POWER  0xB4u
 
 enum {
     DS_PH_RESET_ARM = 0,
@@ -156,6 +157,112 @@ ow_status_t ds18b20_convert_poll(ds18b20_t *d)
 
     if ((d != 0) && (st != OW_BUSY)) {
         d->result = (uint8_t)st;
+    }
+    return st;
+}
+
+bool ds18b20_power_supply_start(ds18b20_t *d, const uint8_t *rom)
+{
+    if ((d == 0) || (d->phase != DS_PH_DONE) || ow_hal_busy()) {
+        return false;
+    }
+    d->match_rom = (rom != 0);
+    if (rom != 0) {
+        memcpy(d->rom, rom, 8u);
+    }
+    d->phase = DS_PH_RESET_ARM;
+    return true;
+}
+
+static ow_status_t power_supply_poll_raw(ds18b20_t *d)
+{
+    if (d == 0) {
+        return OW_PARAM;
+    }
+
+    switch (d->phase) {
+    case DS_PH_RESET_ARM:
+        ow_hal_strong_pullup(false);
+        ow_reset_start();
+        d->phase = DS_PH_RESET_WAIT;
+        return OW_BUSY;
+
+    case DS_PH_RESET_WAIT: {
+        bool presence = false;
+        ow_status_t st = ow_reset_poll(&presence);
+
+        if (st == OW_BUSY) {
+            return OW_BUSY;
+        }
+        if ((st != OW_OK) || !presence) {
+            d->phase = DS_PH_DONE;
+            return OW_NO_PRESENCE;
+        }
+        {
+            uint16_t n = build_prefix(d, d->cmd);
+
+            d->cmd[n++] = DS18B20_CMD_READ_POWER;
+            d->cmd_len = (uint8_t)n;
+        }
+        ow_tx_reset();
+        d->phase = DS_PH_WRITE_BUILD;
+        return OW_BUSY;
+    }
+
+    case DS_PH_WRITE_BUILD:
+        if (ow_tx_build(d->cmd, d->cmd_len) != 0u) {
+            return OW_BUSY;
+        }
+        if (!ow_tx_fire(d->cmd_len)) {
+            d->phase = DS_PH_DONE;
+            return OW_PARAM;
+        }
+        d->phase = DS_PH_WRITE_WAIT;
+        return OW_BUSY;
+
+    case DS_PH_WRITE_WAIT: {
+        ow_status_t st = ow_write_poll();
+
+        if (st == OW_BUSY) {
+            return OW_BUSY;
+        }
+        if (st != OW_OK) {
+            d->phase = DS_PH_DONE;
+            return st;
+        }
+        if (!ow_read_start(1u)) {
+            d->phase = DS_PH_DONE;
+            return OW_PARAM;
+        }
+        d->phase = DS_PH_READ_WAIT;
+        return OW_BUSY;
+    }
+
+    case DS_PH_READ_WAIT: {
+        ow_status_t st = ow_read_poll(d->sp);
+
+        if (st == OW_BUSY) {
+            return OW_BUSY;
+        }
+        d->phase = DS_PH_DONE;
+        return st;
+    }
+
+    case DS_PH_DONE:
+    default:
+        return (ow_status_t)d->result;
+    }
+}
+
+ow_status_t ds18b20_power_supply_poll(ds18b20_t *d, bool *parasite)
+{
+    ow_status_t st = power_supply_poll_raw(d);
+
+    if ((d != 0) && (st != OW_BUSY)) {
+        d->result = (uint8_t)st;
+        if ((st == OW_OK) && (parasite != 0)) {
+            *parasite = (d->sp[0] & 0x01u) == 0u;
+        }
     }
     return st;
 }

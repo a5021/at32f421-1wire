@@ -12,8 +12,14 @@ AT32F421F8P7 (Cortex-M4, 64K flash, 16K SRAM, TSSOP20).
 | I2C2 SCL | PA0 | MUX 4, open-drain, external pull-up |
 | I2C2 SDA | PA1 | MUX 4, open-drain, external pull-up |
 
-Parasite-powered DS18B20 is supported by switching PA10 to push-pull while
-the conversion runs.
+The manager issues Read Power Supply (`0xB4`) with Skip ROM. If any DS18B20
+reports parasite power, PA10 switches to push-pull during conversion; an
+all-external bus keeps strong pull-up off. `REG_FLAGS.0x40` publishes the
+detected mode. **Measured limitation:** with seven parasite sensors and the
+93 ohm series resistor, bus voltage falls below 3 V during Convert T. Do not
+use this configuration for parasite-power acceptance. Connect external VDD,
+put a MOSFET strong pull-up on the bus side of the resistor, or reduce the
+resistor and repeat both voltage and I2C-coupling tests.
 
 ## Engine
 
@@ -80,8 +86,8 @@ registers, invalid-slot markers). Short summary:
 | Address | Name | Meaning |
 |---------|------|---------|
 | `0x00` | `REG_MAGIC` | `0x5A` sanity byte |
-| `0x01` | `REG_VERSION` | Firmware version |
-| `0x02` | `REG_FLAGS` | Search/busy/snapshot/error flags |
+| `0x01` | `REG_VERSION` | Register-map version `0x06` |
+| `0x02` | `REG_FLAGS` | Search/busy/snapshot/error/parasite-power flags |
 | `0x03` | `REG_DEVICES` | Total devices found (may exceed 16) |
 | `0x04` | `REG_DS18B20` | DS18B20 count (may exceed 16) |
 | `0x05` | `REG_ERROR` | Last error code |
@@ -112,12 +118,14 @@ slave timing, but a 400 kHz master is needed to verify 400 kHz on the wire.
 The Pico tester requests 440 kHz to compensate for the DW_apb_i2c overhead
 and measures 400 kHz on SCL.
 
-Only `REG_SPEED`, `REG_CMD` and `REG_SELECTED` are writable; writes to any
-other register are ignored. The command is queued while the manager is busy.
+Only `REG_SPEED`, `REG_CMD`, `REG_SELECTED` and unlocked `REG_FAULT` are
+writable; writes to any other register are ignored. STOP-latched commands and
+selections are dispatched at the next idle main-loop point. `REG_FAULT` requires
+key `0xA5` followed by a code within 10 ms.
 
 ### Conformance tester (RP2040)
 
-`tools/rp2040-tester/` is an autonomous Pico tester for this bridge: 42
+`tools/rp2040-tester/` is an autonomous Pico tester for this bridge: 58
 tests, 400 kHz measured with a PIO sampler, stress and fuzzing, verdict on
 the LED and JSON-free text over USB CDC. See its README for wiring, build
 and the full test list. It also documents the 2.2 kOhm pull-up requirement
@@ -129,7 +137,7 @@ Requires `arm-none-eabi-gcc` (newlib) and GNU make.
 
 ```sh
 make            # build/at32f421-1wire.elf + .hex + .bin
-make test       # host tests + Python register-map check (451 checks)
+make test       # host tests + Python register-map check (488 checks)
 make DIAG_BUILD=1   # diagnostic build: no automatic I2C recovery or hardware WDT
 make size
 ```

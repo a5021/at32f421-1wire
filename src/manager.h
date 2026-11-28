@@ -9,11 +9,11 @@ extern "C" {
 #endif
 
 /*
- * Register-map constants shared with the I2C bridge in app/main.c.
+ * Register-map constants shared with the I2C bridge in app/i2c_slave.c.
  */
 #define REG_MAGIC               0x00u
 #define REG_VERSION             0x01u
-#define BRIDGE_MAP_VERSION      0x05u
+#define BRIDGE_MAP_VERSION      0x06u
 #define REG_FLAGS               0x02u
 #define REG_DEVICES             0x03u
 #define REG_DS18B20             0x04u
@@ -49,6 +49,9 @@ extern "C" {
 #define REG_DIAG_BUS            0x4Du   /* BUSERR while a frame was open */
 #define REG_DIAG_EARLY_NACK     0x4Eu   /* ACKFAIL before the last map byte */
 #define REG_DIAG_EARLY_NACK_POS 0x4Fu   /* tx_index of the last early NACK */
+#define REG_DIAG_ABORT          0x50u   /* hardware frame aborts */
+#define REG_DIAG_ABORT_POS      0x51u   /* tx_index of the last hardware abort */
+#define REG_DIAG_NACK_POS       0x52u   /* tx_index of the last ACKFAIL */
 #define REG_MAX_STEP            0x79u   /* worst manager_poll, us, 16-bit LE */
 #define REG_MAX_STEP_H          0x7Au
 #define REG_MAX_STATE           0x7Bu   /* manager state of that call */
@@ -65,15 +68,18 @@ extern "C" {
 #define FLAG_SNAPSHOT           0x08u
 #define FLAG_EEPROM_OK          0x10u
 #define FLAG_TEMP_ERROR         0x20u
+#define FLAG_BUS_PARASITE       0x40u
 
-/* REG_HEALTH sticky bits. b0..b2 come from I2C status flags. b3/b4 are
- * production-only recovery indicators; DIAG_BUILD leaves them clear. */
+/* REG_HEALTH sticky bits. b0..b2 come from I2C status flags, b3/b4 are
+ * production-only recovery indicators, and b6/b7 latch WDT/software reset. */
 #define HEALTH_BUSERR           0x01u
 #define HEALTH_ARLOST           0x02u
 #define HEALTH_OUF              0x04u
 #define HEALTH_SDA_STUCK        0x08u   /* production: SDA stuck recovery */
 #define HEALTH_RECOVERED        0x10u   /* production: recovery completed */
 #define HEALTH_RECOVERY_FAILED  0x20u   /* production: SCL/SDA not released */
+#define HEALTH_WDT_RESET        0x40u   /* latched from CRM.WDTRSTF at boot */
+#define HEALTH_SW_RESET         0x80u   /* latched from CRM.SWRSTF at boot */
 
 /* REG_FAULT codes: one shot, applied to the next transmitted byte. */
 #define FAULT_BIT_FLIP          1u
@@ -84,6 +90,9 @@ extern "C" {
 #define FAULT_CURRENT           6u      /* strong pull-up during the transfer */
 #define FAULT_EDGES             7u      /* 1-Wire burst during the transfer */
 #define FAULT_STALL             8u      /* CPU stall in the middle of a read */
+#define FAULT_ABORT             9u      /* cycle I2CEN during an active read */
+#define FAULT_UNLOCK_KEY        0xA5u
+#define FAULT_UNLOCK_WINDOW_US  10000u
 
 #define DEV_MAX                 16u
 _Static_assert(REG_ROMS + 8u * DEV_MAX <= 256u, "ROM map overflows the register file");
@@ -94,7 +103,8 @@ enum {
     MGR_READ,
     MGR_EEPROM,
     MGR_PUBLISH,
-    MGR_WAIT
+    MGR_WAIT,
+    MGR_POWER
 };
 
 /* Shared register file, defined here but also visible to the I2C bridge

@@ -158,6 +158,7 @@ mock_dev_t *mock_add(mock_dev_type_t type, const uint8_t *rom)
         memcpy(d->rom, rom, 8u);
     }
     d->temp_raw = 0x0550;               /* +85.0 C, power-on value */
+    d->parasite = true;
     d->sp18[2] = 0x4B;                  /* TH */
     d->sp18[3] = 0x46;                  /* TL */
     d->sp18[4] = 0x7F;                  /* 12-bit */
@@ -401,6 +402,25 @@ static void execute_cmd(int cmd, const uint8_t *p)
     int i;
 
     if (d == 0) {
+        return;
+    }
+
+    if (cmd == 0xB4) {
+        bool external = true;
+        bool any = false;
+        uint8_t reply;
+
+        for (i = 0; i < g_devs; i++) {
+            if (((g_sel & (1u << i)) != 0u) &&
+                (g_dev[i].type == MOCK_DS18B20)) {
+                any = true;
+                if (g_dev[i].parasite) {
+                    external = false;
+                }
+            }
+        }
+        reply = (external && any) ? 1u : 0u;
+        queue_rx(&reply, 1);
         return;
     }
 

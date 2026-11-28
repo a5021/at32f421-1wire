@@ -2,7 +2,7 @@
 
 Updated: 2026-11-28
 
-## Current build (register map 0x05)
+## Current build (register map 0x06)
 
 The I2C priority guard was tested and rejected. A 1 ms whole-manager guard and
 a 50 us guard made short stress runs clean, but both reduced `run quick` to
@@ -14,24 +14,37 @@ transport rate.
 
 | setup | result |
 |-------|--------|
-| `run quick`, production watchdog build | 49/49 PASS with 93 ohm PA10 series resistor |
-| `run quick`, `DIAG_BUILD=1` | 49/49 PASS |
-| `run full`, production | 57/57 PASS with 93 ohm; one prior run 56/57 after 2 retries/9247 in soak |
-| `stress 1000`, 400 kHz, 93 ohm | three runs: 0 retries each, 0 invalid/errors |
+| `run quick`, production watchdog build | 50/50 PASS with 93 ohm PA10 series resistor |
+| `run quick`, `DIAG_BUILD=1` | 50/50 PASS |
+| `run full`, production | 58/58 PASS with 93 ohm |
+| `stress 1000`, 400 kHz, 93 ohm | three final runs: 0 retries each, 0 invalid/errors |
 | `stress 5000`, 400 kHz, 93 ohm | 3 retries, 0 invalid/errors |
-| `stress 1000`, 100 kHz, 93 ohm | 0 retries, 0 invalid/errors |
+| `stress 20000`, 400 kHz, 93 ohm | two runs: 2 + 3 retries; 5/40000 total, 0 invalid/errors |
+| `stress 20000`, 100 kHz, 93 ohm | two runs: 1 + 4 retries; 5/40000 total, 0 invalid/errors |
+| `repeat 20000`, 400 kHz, 93 ohm | 0 write/read transport errors; full-map `diff` is live-counter noise |
+| `stress 1000`, 100 kHz, 93 ohm | final run: 0 retries, 0 invalid/errors |
 | T46 SDA-stuck policy | PASS in production and diagnostic builds |
 | T46 open-frame timeout | PASS: production recovers, diagnostic waits for next address |
 | T46 slow master pause | PASS: no recovery during a 1200 ms SCL-low write pause |
+| T46 active abort PE cycle | PASS: abort counter incremented; next frame worked in 6.35 ms |
+| DS18B20 hot-plug | PASS: unplug/replug, rescan found 9 devices/7 DS18B20; ROM CRC and three rescans stable |
+| parasite bus voltage | FAIL: below 3 V during seven-sensor Convert T with 93 ohm |
+| reset-cause health bits | PASS: forced HardFault gave `0x80`; WDT timeout gave `0x40` |
 | hardware WDT timeout | PASS: suppressed reload caused reboot and `CRM_WDTRSTF` |
 | HardFault reset | PASS: production handler caused reboot and `CRM_SWRSTF` |
-| host tests | 451 checks, 0 failures; Python register-map check passes |
+| host tests | 488 checks, 0 failures; Python register-map check passes |
 | CMake | production and `DIAG_BUILD=ON` firmware builds link |
 
 Fixes in this build:
 - `STS1` and `STS2` reads that clear `ADDR7F` are adjacent in generated `-O2`
   assembly.
-- Register-map version is `0x05`; the tester reads the shared version constant.
+- Register-map version is `0x06`; the tester reads the shared version constant.
+- Read Power Supply (`0xB4`, Skip ROM) detects the wired-AND power mode before
+  each conversion. Strong pull-up is enabled only when at least one DS18B20 is
+  parasite-powered; `FLAG_BUS_PARASITE` (`0x40`) publishes the result. The bench
+  currently reports parasite mode (`REG_FLAGS=0x5D`), but its bus voltage was
+  measured below 3 V during seven-sensor Convert T with 93 ohm. The transport
+  results below therefore do not validate parasite-power operation.
 - Early NACK diagnostics count only `ACKFAIL` after byte 128 and before the
   last map byte, then record `tx_index`; stress output includes
   GATE/START/BUS/early-NACK.
@@ -40,20 +53,33 @@ Fixes in this build:
   This correlates the 400 kHz failures with the slave observing a NACK inside
   a long read. The 100 kHz run had 6 validate but zero early NACK, so at least
   one additional failure class remains.
+- The second 100 kHz 20 000-read run had four validate failures, all classified
+  as FF-tail; the last began at offset 64 with XOR `0x08`. Early-NACK stayed
+  zero. `REG_DIAG_NACK_POS` now preserves the last NACK after byte 16 and
+  before byte 255, so the next occurrence can test the ACK-bit hypothesis
+  without short diagnostic reads overwriting the position.
 - A 93 ohm series resistor was installed between PA10 and the 1-Wire bus.
   Three 400 kHz `stress 1000` runs then had zero retries and zero early NACK;
   `stress 5000` had 3 retries and 2 early NACKs, while 100 kHz `stress 1000`
   had zero retries. The 400 kHz rate is now 0.6 retries/1000, inside the
   acceptance target.
-- `REG_SELECTED` is latched at STOP with command/speed changes; the latch helper
-  and `BRIDGE_MAP_VERSION` have host coverage.
+- `REG_SELECTED`, command and speed changes are latched at STOP, then dispatched
+  from the main loop at the next idle point. A new address arriving first drops
+  the previous dispatch; aborted frames also cancel it.
+- `REG_FAULT` now requires unlock key `0xA5` followed by a fault code within
+  10 ms. The unlock is single-use. Fault code 9 cycles `I2CEN` during an active
+  read; T46 verifies the next frame succeeds without waiting for the watchdog.
+- Boot reset cause is latched from CRM into `HEALTH_WDT_RESET` (`0x40`) and
+  `HEALTH_SW_RESET` (`0x80`). Forced HardFault and WDT timeout produced the
+  expected health values.
 - Production builds restore SDA-stuck recovery and a 1 s open-frame watchdog.
   `DIAG_BUILD=1` disables both; T46 accepts either policy. The watchdog defers
   on a new START/address, on SDA-low START/STOP-like states, and when SCL is low
   without an owed `TDBE`/`RDBF` byte. It also requires a 10 ms unchanged quiet
-  window so STOPF can win a GPIO-idle race. Recovery reports `HEALTH_RECOVERED` only when SCL and SDA both finish high,
-  otherwise `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting
-  for data. T46 verifies a 1200 ms live-master pause causes no recovery.
+  window so STOPF can win a GPIO-idle race. Recovery reports
+  `HEALTH_RECOVERED` only when SCL and SDA both finish high, otherwise
+  `HEALTH_RECOVERY_FAILED`; the SDA detector ignores frames waiting for data.
+  T46 verifies a 1200 ms live-master pause causes no recovery.
 - Production also enables the independent WDT with a nominal 4 s timeout and
   reloads it once per main-loop pass. `HardFault_Handler` requests a system
   reset; `DIAG_BUILD=1` leaves the WDT off and preserves the debugger halt.
@@ -64,15 +90,19 @@ Fixes in this build:
 - The I2C slave state machine moved from `app/main.c` to `app/i2c_slave.c/h`
   behind the `app/i2c_hw.c` register adapter. Host tests cover STOPF+ADDR7F
   ordering, repeated START, early/final NACK, STOP gating, BUSERR/ARLOST/OUF
-  priority, register-write policy, deferred speed, latch abort, fault commit,
-  recovery and frame timeout.
+  priority, register-write policy, deferred speed/dispatch, latch abort, fault
+  unlock/commit/abort, recovery, reset cause and frame timeout. The mock now
+  models SCL stretch and `TDBE`/`RDBF` release on DT access.
 - Speed changes are latched at STOP but applied from the main loop after a
   50 us idle-high window, avoiding peripheral re-init races with the next START.
   The 100 kHz TRISE clamp is documented as a safe 6-bit field-width limit.
 - T22 now observes for 5 s instead of 2 s; it still rejects cycle jumps and
   non-monotonic values.
 - `REG_DIAG_START` (0x4C) and `REG_DIAG_BUS` (0x4D) count STARTF/BUSERR once per
-  open frame.
+  open frame. `REG_DIAG_ABORT` (0x50..0x51) counts hardware aborts and stores
+  `tx_index`; `REG_DIAG_NACK_POS` (0x52) stores the last ACKFAIL position after
+  byte 16 and before byte 255. Stress output records first-diff offset, XOR mask
+  and distortion class for every sampled CRC failure.
 - `map_copy_chunk()` now uses per-word `memcpy`, removing strict-aliasing UB.
   ARM code remains a word-copy loop; publish phase-0 max improved from 6 to
   4 us on the bench.
@@ -94,12 +124,13 @@ confirming the coupling path. Layout and pull-up tuning remain optional.
 `torn` counts CRC-valid reads whose two `REG_SEQ` probes crossed a publish. It
 is a snapshot-boundary observation, not a failed transfer or a retry. `retries`
 counts CRC or transport failures that the master had to repeat. Acceptance
-target: zero invalid/errors and at most one retry per 1000 reads at 400 kHz;
-the current 1-6 retry spread does not meet that target consistently.
+target: zero invalid/errors and at most one retry per 1000 reads at 400 kHz.
+The final three 1000-read runs meet it with zero retries. Two 20 000-read runs at
+400 kHz produced 5 retries total: 0.125/1000, with an approximate one-sided
+95% Poisson upper bound of 0.27/1000. Two 20 000-read runs at 100 kHz also
+produced 5/40000, with zero invalid/errors.
 
-## Historical numbers
-
-## Decision
+## Root-cause decision: clock stretching
 
 The root cause of every transport symptom was CTRL1 bit 7.  On this part the bit
 is NOSTRETCH, like STM32 `CR1.NOSTRETCH`: `0` holds SCL low until the slave has
@@ -215,11 +246,16 @@ concurrency; the remaining retry is therefore treated as a PA10 coupling or
 in-flight pass overlap issue.
 
 ## Remaining
-- With the 93 ohm PA10 resistor, short 400 kHz stress meets the target of at
-  most one retry per 1000 reads. The `stress 5000` run still had 3 retries and
-  2 early NACKs, so the residual rate is not zero.
+- With the 93 ohm PA10 resistor, short and long 400 kHz stress meet the target
+  of at most one retry per 1000 reads. The two 20 000-read runs still produced
+  5 retries total and 2 early NACKs in one run, so the residual rate is not
+  zero.
 - The default 165 us 1-Wire slot remains an intentional DS18B20 timing
   deviation; the strict 120 us option is measured but raises I2C retries.
+- The bench reports parasite power (`REG_FLAGS=0x5D`), and measured bus voltage
+  is below 3 V during seven-sensor Convert T with 93 ohm. This configuration is
+  not valid for parasite-power acceptance. Use external VDD, a bus-side MOSFET
+  strong pull-up, or a lower resistor and repeat voltage/coupling tests.
 - Starting `run full` immediately after an aborted full run can leave the
   manager in `MGR_CONVERT` with `ow_active` set and the cycle counter frozen.
   A target reset clears it; fresh-reset full runs pass. Trigger is not yet
@@ -227,8 +263,10 @@ in-flight pass overlap issue.
 
 ## Next
 
-1. Keep short acceptance runs at 400 kHz and 100 kHz; only then repeat a longer
-   `stress` run.
+1. Long 400/100 kHz soaks and physical DS18B20 hot-plug are complete. The user
+   chose to keep the current 93 ohm hardware temporarily; parasite-power
+   hardware acceptance remains excluded until external VDD, a bus-side MOSFET
+   strong pull-up or lower resistance is applied.
 2. The 100-220 ohm PA10 series-resistor step is complete with 93 ohm. Further
    layout/ground-return separation or a different 1-Wire pin is optional.
 
@@ -311,9 +349,6 @@ e9ba176).
   32-34/48 by blocking or corrupting manager operations. Guard=0 baseline is
   48/48 after widening the T22 observation window, with 1 retry per 1000 stress
   reads at 400 kHz.
-- 250 ms open-frame watchdog: the earlier production value could disturb a live
-  slow master. Current production uses 1 s plus START/address and SCL/owed-byte
-  preflight checks; `DIAG_BUILD=1` disables both mechanisms.
 - Early BUSERR clear without frame teardown: did not remove CRC failures in
   short `couple` runs. Reverted to the normal handler order.
 - "The residual errors happen because this slave cannot stretch": wrong. The

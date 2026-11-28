@@ -11,6 +11,7 @@ typedef enum {
 } i2c_recovery_result_t;
 
 void i2c_hw_init(uint32_t scl_hz);
+uint32_t i2c_hw_reset_cause(void);
 uint32_t i2c_hw_sts1(void);
 uint32_t i2c_hw_sts2(void);
 uint32_t i2c_hw_gpio_idt(void);

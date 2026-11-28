@@ -1,4 +1,5 @@
 #include "test.h"
+#include "i2c_hw.h"
 #include "i2c_hw_mock.h"
 #include "i2c_slave.h"
 #include "manager.h"
@@ -21,7 +22,7 @@ static void reset_all(void)
     mock_reset();
     i2c_hw_mock_reset();
     manager_init();
-    i2c_slave_init();
+    i2c_slave_init(i2c_hw_reset_cause());
     i2c_slave_set_cycles_per_us(120u);
 }
 
@@ -43,6 +44,7 @@ static void write_register(uint8_t addr, uint8_t value)
     i2c_hw_mock_set_status(STS1_RDBF, 0u, 0x00000003u);
     i2c_slave_poll();
     i2c_hw_mock_set_dt(value);
+    i2c_hw_mock_set_status(STS1_RDBF, 0u, 0x00000003u);
     i2c_slave_poll();
 }
 
@@ -64,7 +66,7 @@ static void test_stop_address_order(void)
 
     TF_CHECK(i2c_slave_busy());
     TF_CHECK_EQ(2u, i2c_slave_reg_byte(REG_FRAMES));
-    TF_CHECK_EQ(3u, g_regs[REG_SELECTED]);
+    TF_CHECK_EQ(0u, g_regs[REG_SELECTED]);
     TF_CHECK_EQ(6u, i2c_mock_event_count);
     TF_CHECK_EQ(MOCK_EVT_STS1, i2c_hw_mock_event(0).type);
     TF_CHECK_EQ(MOCK_EVT_STS1, i2c_hw_mock_event(1).type);
@@ -92,6 +94,40 @@ static void test_repeated_start(void)
     TF_CHECK(i2c_slave_busy());
 }
 
+static void test_stretch_model(void)
+{
+    reset_all();
+    start_read();
+    i2c_hw_mock_reset();
+    i2c_hw_mock_set_status(STS1_TDBE, STS2_DIRF, 0x00000003u);
+    TF_CHECK((i2c_mock_gpio & 0x00000001u) == 0u);
+    TF_CHECK(i2c_slave_busy());
+    i2c_slave_poll();
+    TF_CHECK((i2c_mock_gpio & 0x00000001u) != 0u);
+    TF_CHECK((i2c_mock_sts1 & STS1_TDBE) == 0u);
+    TF_CHECK_EQ(1u, i2c_hw_mock_count(MOCK_EVT_DT_WRITE));
+
+    reset_all();
+    start_write();
+    i2c_hw_mock_set_dt(REG_MAGIC);
+    i2c_hw_mock_set_status(STS1_RDBF, 0u, 0x00000003u);
+    TF_CHECK((i2c_mock_gpio & 0x00000001u) == 0u);
+    i2c_slave_poll();
+    TF_CHECK((i2c_mock_gpio & 0x00000001u) != 0u);
+    TF_CHECK((i2c_mock_sts1 & STS1_RDBF) == 0u);
+
+    reset_all();
+    start_read();
+    i2c_hw_mock_reset();
+    i2c_hw_mock_set_status(STS1_BUSERR | STS1_TDBE, STS2_DIRF,
+                           0x00000003u);
+    i2c_slave_poll();
+    TF_CHECK(!i2c_slave_busy());
+    TF_CHECK_EQ(1u, i2c_hw_mock_count(MOCK_EVT_ABORT));
+    TF_CHECK_EQ(0u, i2c_hw_mock_count(MOCK_EVT_DT_WRITE));
+    TF_CHECK_EQ(0x00000003u, i2c_mock_gpio);
+}
+
 static void test_nack_lifetime(void)
 {
     reset_all();
@@ -102,6 +138,7 @@ static void test_nack_lifetime(void)
     TF_CHECK(i2c_slave_busy());
     TF_CHECK_EQ(0u, i2c_hw_mock_count(MOCK_EVT_ABORT));
     TF_CHECK_EQ(0u, i2c_slave_reg_byte(REG_DIAG_EARLY_NACK));
+    TF_CHECK_EQ(0u, i2c_slave_reg_byte(REG_DIAG_NACK_POS));
 
     stop_frame();
     TF_CHECK(!i2c_slave_busy());
@@ -119,6 +156,7 @@ static void test_early_and_final_nack_positions(void)
     i2c_slave_poll();
     TF_CHECK_EQ(1u, i2c_slave_reg_byte(REG_DIAG_EARLY_NACK));
     TF_CHECK_EQ(129u, i2c_slave_reg_byte(REG_DIAG_EARLY_NACK_POS));
+    TF_CHECK_EQ(129u, i2c_slave_reg_byte(REG_DIAG_NACK_POS));
 
     reset_all();
     start_read();
@@ -212,7 +250,11 @@ static void test_register_write_policy(void)
     start_write();
     write_register(REG_SELECTED, 0xFFu);
     TF_CHECK_EQ(0u, g_regs[REG_SELECTED]);
+    i2c_slave_dispatch_pending();
+    TF_CHECK_EQ(0u, g_regs[REG_SELECTED]);
     stop_frame();
+    TF_CHECK_EQ(0u, g_regs[REG_SELECTED]);
+    i2c_slave_dispatch_pending();
     TF_CHECK_EQ(15u, g_regs[REG_SELECTED]);
 }
 
@@ -263,6 +305,7 @@ static void test_clear_command(void)
     start_write();
     write_register(REG_CMD, 3u);
     stop_frame();
+    i2c_slave_dispatch_pending();
     TF_CHECK_EQ(0u, i2c_slave_reg_byte(REG_FRAMES));
     TF_CHECK_EQ(0u, i2c_slave_reg_byte(REG_HEALTH));
     TF_CHECK_EQ(0u, g_i2c_err_bus);
@@ -274,17 +317,69 @@ static void test_fault_commit(void)
     start_write();
     write_register(REG_FAULT, FAULT_BIT_FLIP);
     stop_frame();
-
     start_write();
     i2c_hw_mock_set_dt(0u);
     i2c_hw_mock_set_status(STS1_RDBF, 0u, 0x00000003u);
     i2c_slave_poll();
     stop_frame();
+    i2c_hw_mock_reset();
+    start_read();
+    TF_CHECK_EQ(0x5Au, i2c_hw_mock_event(i2c_mock_event_count - 1u).a);
+
+    reset_all();
+    i2c_hw_mock_set_cycles(0u);
+    start_write();
+    write_register(REG_FAULT, FAULT_UNLOCK_KEY);
+    stop_frame();
+    start_write();
+    write_register(REG_FAULT, FAULT_BIT_FLIP);
+    stop_frame();
+    start_write();
+    i2c_hw_mock_set_dt(0u);
+    i2c_hw_mock_set_status(STS1_RDBF, 0u, 0x00000003u);
+    i2c_slave_poll();
+    stop_frame();
+    i2c_hw_mock_reset();
+    start_read();
+    TF_CHECK_EQ(0x5Bu, i2c_hw_mock_event(i2c_mock_event_count - 1u).a);
+
+    reset_all();
+    i2c_hw_mock_set_cycles(0u);
+    start_write();
+    write_register(REG_FAULT, FAULT_UNLOCK_KEY);
+    stop_frame();
+    i2c_hw_mock_set_cycles(FAULT_UNLOCK_WINDOW_US * 120u + 1u);
+    start_write();
+    write_register(REG_FAULT, FAULT_BIT_FLIP);
+    stop_frame();
+    start_write();
+    i2c_hw_mock_set_dt(0u);
+    i2c_hw_mock_set_status(STS1_RDBF, 0u, 0x00000003u);
+    i2c_slave_poll();
+    stop_frame();
+    i2c_hw_mock_reset();
+    start_read();
+    TF_CHECK_EQ(0x5Au, i2c_hw_mock_event(i2c_mock_event_count - 1u).a);
+}
+
+static void test_fault_abort(void)
+{
+    reset_all();
+    i2c_hw_mock_set_cycles(0u);
+    start_write();
+    write_register(REG_FAULT, FAULT_UNLOCK_KEY);
+    stop_frame();
+    start_write();
+    write_register(REG_FAULT, FAULT_ABORT);
+    stop_frame();
 
     i2c_hw_mock_reset();
     start_read();
-    TF_CHECK_EQ(1u, i2c_hw_mock_count(MOCK_EVT_DT_WRITE));
-    TF_CHECK_EQ(0x5Bu, i2c_hw_mock_event(i2c_mock_event_count - 1u).a);
+    TF_CHECK(!i2c_slave_busy());
+    TF_CHECK_EQ(1u, i2c_hw_mock_count(MOCK_EVT_ABORT));
+    TF_CHECK_EQ(0u, i2c_hw_mock_count(MOCK_EVT_DT_WRITE));
+    TF_CHECK_EQ(1u, i2c_slave_reg_byte(REG_DIAG_ABORT));
+    TF_CHECK_EQ(1u, i2c_slave_reg_byte(REG_DIAG_ABORT_POS));
 }
 
 static void test_recovery_policy(void)
@@ -311,6 +406,16 @@ static void test_recovery_policy(void)
     i2c_slave_health_poll(230u);
     TF_CHECK_EQ(2u, i2c_hw_mock_count(MOCK_EVT_RECOVER));
     TF_CHECK((i2c_slave_reg_byte(REG_HEALTH) & HEALTH_RECOVERY_FAILED) != 0u);
+}
+
+static void test_reset_cause(void)
+{
+    reset_all();
+    i2c_hw_mock_set_reset_cause(HEALTH_WDT_RESET | HEALTH_SW_RESET);
+    i2c_slave_init(i2c_hw_reset_cause());
+    TF_CHECK_EQ(HEALTH_WDT_RESET | HEALTH_SW_RESET,
+                i2c_slave_reg_byte(REG_HEALTH));
+    TF_CHECK_EQ(0u, i2c_hw_reset_cause());
 }
 
 static void test_frame_timeout_and_stats(void)
@@ -344,6 +449,7 @@ void test_i2c_slave_run(void)
 {
     test_stop_address_order();
     test_repeated_start();
+    test_stretch_model();
     test_nack_lifetime();
     test_early_and_final_nack_positions();
     test_stop_gate();
@@ -355,6 +461,8 @@ void test_i2c_slave_run(void)
     test_abort_cancels_speed();
     test_clear_command();
     test_fault_commit();
+    test_fault_abort();
     test_recovery_policy();
+    test_reset_cause();
     test_frame_timeout_and_stats();
 }

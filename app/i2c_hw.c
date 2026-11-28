@@ -3,6 +3,7 @@
 #include "at32f421.h"
 #include "clock.h"
 #include "i2c_hw.h"
+#include "manager.h"
 
 #define I2C_ADDR7               0x42u
 #define I2C_OADDR1              ((uint16_t)(I2C_ADDR7 << 1))
@@ -77,6 +78,21 @@ void i2c_hw_init(uint32_t scl_hz)
     I2C2->oaddr1_bit.addr1mode = 0;
 
     i2c_apply_speed(scl_hz);
+}
+
+uint32_t i2c_hw_reset_cause(void)
+{
+    uint32_t flags = CRM->ctrlsts;
+    uint32_t cause = 0u;
+
+    if ((flags & (1u << 29)) != 0u) {
+        cause |= HEALTH_WDT_RESET;
+    }
+    if ((flags & (1u << 28)) != 0u) {
+        cause |= HEALTH_SW_RESET;
+    }
+    CRM->ctrlsts_bit.rstfc = 1u;
+    return cause;
 }
 
 uint32_t i2c_hw_sts1(void)

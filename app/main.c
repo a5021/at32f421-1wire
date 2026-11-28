@@ -93,6 +93,8 @@ bool manager_i2c_busy(void)
 
 int main(void)
 {
+    uint32_t reset_cause = i2c_hw_reset_cause();
+
     clock_config();
     timebase_init();
     calibrate_cycles();
@@ -100,7 +102,7 @@ int main(void)
     i2c_hw_init(100000u);
 
     manager_init();
-    i2c_slave_init();
+    i2c_slave_init(reset_cause);
 
 #ifndef DIAG_BUILD
     watchdog_init();
@@ -113,6 +115,7 @@ int main(void)
 #endif
         i2c_slave_poll();
         if (!i2c_slave_busy()) {
+            i2c_slave_dispatch_pending();
             uint8_t state = (uint8_t)(manager_state_reg() & 0x0Fu);
             uint32_t t0 = DWT->CYCCNT;
 

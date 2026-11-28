@@ -459,7 +459,10 @@ bool select_sensor(uint8_t index)
 
 bool bus_fault(uint8_t code)
 {
-    return bus_write_reg(REG_FAULT, &code, 1u) == 1;
+    uint8_t key = FAULT_UNLOCK_KEY;
+
+    return bus_write_reg(REG_FAULT, &key, 1u) == 1 &&
+           bus_write_reg(REG_FAULT, &code, 1u) == 1;
 }
 
 /* ---- bit-banged fault injection ---------------------------------------- */

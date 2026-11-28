@@ -31,7 +31,7 @@ void test_headers_run(void)
     TF_CHECK(sizeof(ow_search_t) >= 16u);
     TF_CHECK(sizeof(ds18b20_t) >= 16u);
     TF_CHECK(sizeof(ds2431_t) >= 16u);
-    TF_CHECK_EQ(0x05, BRIDGE_MAP_VERSION);
+    TF_CHECK_EQ(0x06, BRIDGE_MAP_VERSION);
 
     {
         i2c_select_latch_t latch = { 0u, false };

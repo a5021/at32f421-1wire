@@ -128,11 +128,11 @@ the longest low gives the stretch.
 
 | ID | Check |
 |----|-------|
-| T12 | magic `0x5A`, version 1 |
+| T12 | magic `0x5A`, shared register-map version (currently `0x06`) |
 | T13 | `REG_DS18B20` matches the `0x28` ROM count |
 | T14 | Dallas CRC-8 for every stored ROM |
 | T15 | unused slots: temp `0x8000`, status `0xFF`, ROM all `0xFF` |
-| T16 | writes outside `0x0F`, `0x60`, `0x61` are ignored |
+| T16 | writes outside `0x0F`, `0x60`, `0x61` and unlocked `0x62` are ignored |
 | T17 | `REG_SPEED` values other than 0/1 are ignored |
 | T18 | unknown `REG_CMD` value changes nothing |
 | T19 | speed 0/1 readback |
@@ -170,22 +170,45 @@ the longest low gives the stretch.
 | T41 | 1000 alternating NACK/ACK transactions |
 | T42 | final map valid and cycle still advancing |
 
+### Health and recovery (T43-T47)
+
+| ID | Check |
+|----|-------|
+| T43 | matched-address frame counter |
+| T44 | health/counter clear |
+| T45 | frame accounting under traffic |
+| T46 | SDA-stuck policy, open-frame timeout, 1200 ms slow-master pause, active I2CEN abort |
+| T47 | no false health flags under normal traffic |
+
+### Fault injection (T48-T55)
+
+| ID | Check |
+|----|-------|
+| T48 | corrupted address phases are detected by frame accounting |
+| T49 | dropped/phantom frame injection |
+| T50 | flipped payload byte fails map CRC |
+| T51 | skipped byte is detected and the next read is clean |
+| T52 | extra clock leaves the map intact |
+| T53 | seeded random fuzz |
+| T54 | fuzz replay has the same digest |
+| T55 | corrupted command/speed/selection writes stay bounded |
+
 `stress` and `soak` also print where the retries came from:
 
 ```
 retry phase: busy 1, idle 0, unknown 0
 retry offsets: 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 unknown 0
-  #1 validate try1 cycle 77 flags 0x1D off 29 6 ms
+retry distortion: other 0 all-ff 0 ff-tail 0 header 0 seq 0 single-bit 1 byte-diff 0 unstable 0; last single-bit off 29 xor 0x04
+  #1 validate try1 cycle 77 flags 0x1D off 29 single-bit xor 0x04 6 ms
 ```
 
 `phase` says whether the manager was busy (converting, searching or
 publishing) when the read failed, `manager` breaks that down by state,
 `transport steps` says which of the three transactions failed, `bit positions`
 shows which bit of the corrupted byte flipped, `offsets` is a 16-bucket
-histogram over the 256-byte map, and the samples name the class, attempt,
-cycle, flags, corrupted byte and duration. The corruption offset is only
-reported when two consecutive clean reads agree, so a legitimate update is
-never mistaken for a bit error.
+histogram over the 256-byte map, and `distortion` classifies all-FF, FF-tail,
+header, sequence, single-bit, byte-diff and unstable rereads. Samples preserve
+the exact offset, XOR mask, attempt, cycle, flags and duration.
 
 `cmd 4` freezes the manager and `cmd 5` resumes it. A run with the manager
 paused is the control experiment: a static map and no 1-Wire current at all.

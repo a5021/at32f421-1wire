@@ -512,6 +512,40 @@ void suite_map(void)
         }
     }
 
+    t_start("T46", "active abort PE cycle");
+    {
+        (void)send_cmd(CMD_CLEAR_COUNTERS);
+        sleep_ms(10u);
+
+        uint8_t full[256];
+        uint8_t before[2] = {0, 0};
+        uint8_t after[2] = {0, 0};
+        bool armed = bus_fault(FAULT_ABORT);
+        bool sampled_before = bus_read_reg(REG_DIAG_ABORT, before, 2u) == 2;
+        absolute_time_t t0 = get_absolute_time();
+        (void)bus_read_reg(REG_MAGIC, full, sizeof(full));
+        bool sampled_after = bus_read_reg(REG_DIAG_ABORT, after, 2u) == 2;
+        uint8_t magic = 0u;
+        bool alive = bus_read_reg(REG_MAGIC, &magic, 1u) == 1;
+        uint32_t elapsed = (uint32_t)absolute_time_diff_us(t0, get_absolute_time());
+        bool aborted = sampled_before && sampled_after &&
+                       ((uint8_t)(after[0] - before[0]) != 0u);
+
+        if (!armed) {
+            t_fail("abort fault not armed");
+        } else if (!aborted) {
+            t_fail("active frame was not aborted, count %u -> %u",
+                   before[0], after[0]);
+        } else if (!alive || (magic != 0x5Au)) {
+            t_fail("next frame failed after PE cycle, magic 0x%02X", magic);
+        } else if (elapsed > 100000u) {
+            t_fail("abort waited for watchdog, %u us", (unsigned)elapsed);
+        } else {
+            t_pass("PE cycle aborted active frame, next read in %u us",
+                   (unsigned)elapsed);
+        }
+    }
+
     t_start("T47", "health no false alarm");
     {
         uint8_t v;

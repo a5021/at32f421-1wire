@@ -37,6 +37,8 @@ typedef struct {
     uint8_t  attempt;
     uint8_t  flags;
     uint8_t  off;
+    uint8_t  dist;
+    uint8_t  xor_bits;
     uint16_t cycle;
     uint16_t ms;
 } retry_ev_t;
@@ -50,6 +52,10 @@ static uint32_t g_off_unknown;
 static uint32_t g_mgr[8];       /* retries per manager state */
 static uint32_t g_bit[8];       /* which bit position was corrupted */
 static uint32_t g_step[3];      /* transport: seq-in, map, seq-out */
+static uint32_t g_dist[8];      /* validate distortion classes */
+static uint8_t  g_last_dist;
+static int      g_last_diff = -1;
+static uint8_t  g_last_xor;
 
 /* Snapshot of the last validate failure, for the anomaly investigation. */
 static uint8_t g_fail_map[16];
@@ -59,6 +65,7 @@ static uint8_t g_fail_diag[4];
 static uint8_t g_fail_trunc[2];
 static uint8_t g_fail_ffstart;
 static uint8_t g_fail_health;
+static uint8_t g_fail_nack_pos;
 static uint8_t g_fail_tail;
 static uint32_t g_fail_frames;
 static uint32_t g_fail_txn;
@@ -73,6 +80,7 @@ static bool map_volatile_index(int i)
            ((i >= (int)REG_DIAG_GATE) && (i <= (int)REG_DIAG_GATE_POS)) ||
            ((i >= (int)REG_DIAG_START) && (i <= (int)REG_DIAG_BUS)) ||
            ((i >= (int)REG_DIAG_EARLY_NACK) && (i <= (int)REG_DIAG_EARLY_NACK_POS)) ||
+           ((i >= (int)REG_DIAG_ABORT) && (i <= (int)REG_DIAG_NACK_POS)) ||
         ((i >= (int)REG_MAX_STEP) && (i <= (int)REG_EEP_POLL));
 }
 
@@ -87,11 +95,18 @@ static void retry_stats_reset(void)
     memset(g_mgr, 0, sizeof(g_mgr));
     memset(g_bit, 0, sizeof(g_bit));
     memset(g_step, 0, sizeof(g_step));
+    memset(g_dist, 0, sizeof(g_dist));
+    g_last_dist = 0u;
+    g_last_diff = -1;
+    g_last_xor = 0u;
+    g_fail_valid = 0u;
+    g_fail_ffstart = 0xFFu;
+    g_fail_tail = 0u;
     memset(g_ev, 0, sizeof(g_ev));
 }
 
 static void retry_capture(int cls, int attempt, uint32_t us, int off,
-                          uint8_t xor_bits, int step)
+                          uint8_t xor_bits, int step, uint8_t dist)
 {
     uint8_t flags = 0;
     uint8_t raw[2] = { 0, 0 };
@@ -130,6 +145,12 @@ static void retry_capture(int cls, int attempt, uint32_t us, int off,
     } else {
         g_off_unknown++;
     }
+    if ((cls != 0) && (dist < 8u)) {
+        g_dist[dist]++;
+        g_last_dist = dist;
+        g_last_diff = off;
+        g_last_xor = xor_bits;
+    }
 
     if (g_ev_n < RETRY_SAMPLES) {
         retry_ev_t *e = &g_ev[g_ev_n++];
@@ -138,6 +159,8 @@ static void retry_capture(int cls, int attempt, uint32_t us, int off,
         e->attempt = (uint8_t)attempt;
         e->flags = got_flags ? flags : 0xFFu;
         e->off = ((off >= 0) && (off < 256)) ? (uint8_t)off : 0xFFu;
+        e->dist = dist;
+        e->xor_bits = xor_bits;
         e->cycle = cycle;
         e->ms = (uint16_t)((us > 65535000u) ? 65535u : (us / 1000u));
     }
@@ -147,6 +170,10 @@ static void retry_stats_print(void)
 {
     static const char *const state_name[6] = {
         "search", "convert", "read", "eeprom", "publish", "wait"
+    };
+    static const char *const dist_name[8] = {
+        "other", "all-ff", "ff-tail", "header", "seq",
+        "single-bit", "byte-diff", "unstable"
     };
 
     printf("retry phase: busy %u, idle %u, unknown %u\n",
@@ -167,21 +194,30 @@ static void retry_stats_print(void)
         printf(" %u", (unsigned)g_off_bucket[i]);
     }
     printf(" unknown %u\n", (unsigned)g_off_unknown);
+    printf("retry distortion:");
+    for (int i = 0; i < 8; i++) {
+        printf(" %s %u", dist_name[i], (unsigned)g_dist[i]);
+    }
+    printf("; last %s off %d xor 0x%02X\n", dist_name[g_last_dist],
+           g_last_diff, (unsigned)g_last_xor);
 
     {
         uint8_t d[6];
+        uint8_t nack_pos = 0u;
 
         if ((bus_read_reg(REG_DIAG_GATE, d, 2u) == 2) &&
             (bus_read_reg(REG_DIAG_START, d + 2, 4u) == 4)) {
-            printf("diag gate %u@%u start %u bus %u early-nack %u@%u\n",
-                   d[0], d[1], d[2], d[3], d[4], d[5]);
+            (void)bus_read_reg(REG_DIAG_NACK_POS, &nack_pos, 1u);
+            printf("diag gate %u@%u start %u bus %u early-nack %u@%u nack-pos %u\n",
+                   d[0], d[1], d[2], d[3], d[4], d[5], nack_pos);
         }
     }
 
     for (int i = 0; i < g_ev_n; i++) {
-        printf("  #%d %s try%d cycle %u flags 0x%02X off %u %u ms\n", i + 1,
-               g_ev[i].cls ? "validate" : "transport", g_ev[i].attempt + 1,
-               g_ev[i].cycle, g_ev[i].flags, g_ev[i].off,
+        printf("  #%d %s try%d cycle %u flags 0x%02X off %u %s xor 0x%02X %u ms\n",
+               i + 1, g_ev[i].cls ? "validate" : "transport",
+               g_ev[i].attempt + 1, g_ev[i].cycle, g_ev[i].flags, g_ev[i].off,
+               dist_name[g_ev[i].dist], (unsigned)g_ev[i].xor_bits,
                (unsigned)g_ev[i].ms);
     }
 }
@@ -195,6 +231,43 @@ static uint32_t rnd(void)
     x ^= x << 5;
     rng_state = x;
     return x;
+}
+
+static uint8_t distortion_class(const uint8_t *map, int off, uint8_t xb,
+                                bool reread_ok, bool same)
+{
+    bool all_ff = true;
+
+    for (int i = 0; i < 256; i++) {
+        if (map[i] != 0xFFu) {
+            all_ff = false;
+            break;
+        }
+    }
+    if (all_ff) {
+        return 1u;
+    }
+    if ((map[REG_MAGIC] != 0x5Au) || (map[REG_VERSION] != BRIDGE_VERSION)) {
+        return 3u;
+    }
+    if (((map[REG_SEQ] & 1u) != 0u) || (map[REG_SEQ] == 0xFFu)) {
+        return 4u;
+    }
+    if (off >= 0) {
+        bool ff_tail = true;
+
+        for (int i = off; i < 256; i++) {
+            if (map[i] != 0xFFu) {
+                ff_tail = false;
+                break;
+            }
+        }
+        if (ff_tail) {
+            return 2u;
+        }
+        return ((xb != 0u) && ((xb & (uint8_t)(xb - 1u)) == 0u)) ? 5u : 6u;
+    }
+    return (!reread_ok || !same) ? 7u : 0u;
 }
 
 static int read_map_checked(uint32_t *torn, uint32_t *invalid,
@@ -221,7 +294,7 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
             snprintf(g_last_why, sizeof(g_last_why), "i2c:%d", step);
             g_transport++;
             g_retries++;
-            retry_capture(0, attempt, (uint32_t)us, -1, 0u, step - 1);
+            retry_capture(0, attempt, (uint32_t)us, -1, 0u, step - 1, 0u);
             continue;
         }
 
@@ -288,6 +361,7 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
 
                 (void)bus_read_reg(REG_HEALTH, &h, 1u);
                 g_fail_health = h;
+                (void)bus_read_reg(REG_DIAG_NACK_POS, &g_fail_nack_pos, 1u);
                 g_fail_ffstart = 0xFFu;
                 for (int i = 0; i <= 240; i++) {
                     bool all = true;
@@ -313,12 +387,15 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
             }
             g_fail_valid = 1u;
         }
+        bool reread_ok = false;
+        bool same = false;
         {
             uint8_t map2[256];
             uint8_t map3[256];
 
             if (map_read(map2) && map_read(map3)) {
-                bool same = true;
+                reread_ok = true;
+                same = true;
 
                 for (int i = 0; (i < 256) && same; i++) {
                     if (!map_volatile_index(i) && (map2[i] != map3[i])) {
@@ -352,7 +429,9 @@ static int read_map_checked(uint32_t *torn, uint32_t *invalid,
                 }
             }
         }
-        retry_capture(1, attempt, (uint32_t)us, off, xb, 0);
+        uint8_t dist = distortion_class(map, off, xb, reread_ok, same);
+
+        retry_capture(1, attempt, (uint32_t)us, off, xb, 0, dist);
 
         strncpy(g_last_why, why, sizeof(g_last_why) - 1u);
         g_last_why[sizeof(g_last_why) - 1u] = '\0';
@@ -447,12 +526,13 @@ static void stress_loop(uint32_t count, int mode, const char *label)
     if (g_fail_valid != 0u) {
         printf("last fail: seq %02X/%02X magic %02X ver %02X flags %02X "
                "crc %02X%02X diag ffff %u busy %u ack %u reason %u health %02X "
-               "ff-tail %u ff-start %u ouf %u@%u frames %u txn %u\n",
+               "ff-tail %u ff-start %u ouf %u@%u frames %u txn %u nack-pos %u\n",
                g_fail_seq[0], g_fail_seq[1], g_fail_map[0], g_fail_map[1],
                g_fail_map[2], g_fail_crc[1], g_fail_crc[0], g_fail_diag[0],
                g_fail_diag[1], g_fail_diag[2], g_fail_diag[3], g_fail_health,
                g_fail_tail, g_fail_ffstart, g_fail_trunc[0], g_fail_trunc[1],
-               (unsigned)g_fail_frames, (unsigned)g_fail_txn);
+               (unsigned)g_fail_frames, (unsigned)g_fail_txn,
+               (unsigned)g_fail_nack_pos);
     }
 
     /* Zero tolerance: a retry or a malformed map is a failure, not noise.  A

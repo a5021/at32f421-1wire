@@ -6,13 +6,13 @@
 - **Bridge:** the polled I2C slave state machine moved to `app/i2c_slave.c/h`
   behind the `app/i2c_hw.c` register adapter. BUSERR/ARLOST now abort before
   `TDBE`/`RDBF`, preventing a broken frame from clocking another byte.
-- **Bridge:** register-map version is now `0x05`. Early NACK count/position
-  diagnostics exclude normal final and short-read NACKs, and stress output
-  includes GATE/START/BUS/early-NACK counters. `STRETCH` is programmed before
-  `I2CEN`.
-- **Bridge:** `REG_SELECTED` is latched at
-  STOP with command/speed changes, so an aborted write cannot change the active
-  scratchpad selection.
+- **Bridge:** register-map version is now `0x06`. Early NACK and hardware-abort
+  count/position diagnostics exclude normal final and short-read NACKs, and
+  stress output includes GATE/START/BUS/early-NACK plus CRC distortion class.
+  `STRETCH` is programmed before `I2CEN`.
+- **Bridge:** `REG_SELECTED`, command and speed changes are latched at STOP and
+  dispatched from the main loop at the next idle point. A new address arriving
+  first drops the previous dispatch; aborted frames cancel it.
 - **Bridge:** production builds restore SDA-stuck recovery and a 1 s open-frame
   watchdog. `DIAG_BUILD=1` disables both for diagnostics. The watchdog defers
   on START/address, SDA-low START/STOP-like states and a master-held low SCL
@@ -28,6 +28,12 @@
 - **Bridge:** speed changes are latched at STOP and applied from an idle
   main-loop window, avoiding I2C reinitialisation races with the next START.
   The 100 kHz TRISE clamp is documented as a safe field-width limit.
+- **Bridge:** `REG_FAULT` requires unlock key `0xA5` and a code write within
+  10 ms. Code 9 cycles `I2CEN` during an active read; T46 verifies immediate
+  recovery. Boot reset cause is published in `HEALTH_WDT_RESET`/`HEALTH_SW_RESET`.
+- **Manager:** Read Power Supply (`0xB4`, Skip ROM) detects parasite power before
+  conversion. Strong pull-up is enabled only when needed, and
+  `FLAG_BUS_PARASITE` publishes the detected mode.
 - **Manager:** `map_copy_chunk()` uses per-word `memcpy` instead of aliased
   `uint32_t *` casts. ARM output remains a word-copy loop; phase-0 max measured
   4 us versus 6 us before.
@@ -36,7 +42,8 @@
   it passed full but raised I2C stress retries, so it is not the default.
 - **Tests:** I2C host coverage now exercises STOPF+ADDR7F order, repeated START,
   NACK lifetime/position, STOP gating, error priority, write policy, deferred
-  speed, latch abort, fault commit, recovery and frame timeout (441 checks).
+  speed/dispatch, latch abort, fault unlock/commit/abort, stretch release,
+  recovery, reset cause and frame timeout (488 checks).
 - **Tests:** HAL request tests cover reset/read/write/wait slot counts and the
   DMA pulse terminator. STOPF trace verification covered 500 writes plus 500
   reads with correct STOP/NACK placement.
@@ -85,6 +92,13 @@
   hid exactly the defect this work was about.
 
 ### Notes
+- Measured with a 93 ohm PA10 series resistor: three final 400 kHz
+  `stress 1000` runs had zero retries, and 100 kHz had zero retries. Two
+  `stress 20000` runs at each speed produced 5 retries per 40 000 reads with
+  zero invalid/errors (approximate 95% upper bound 0.27/1000). The bench reports
+  parasite power and measured below 3 V during seven-sensor Convert T, so the
+  93 ohm configuration is not valid for parasite-power acceptance. Use external
+  VDD, a bus-side MOSFET strong pull-up, or a lower resistor and retest.
 - Measured with the interrupt path: 300 kHz, 500 000 reads (1-, 2- and 8-byte
   blocks), 0 value differences, 0 underruns, 4 address NACKs; 400 kHz,
   400 000 reads, 0 underruns in `stress`/`soak`, but a residual first-byte

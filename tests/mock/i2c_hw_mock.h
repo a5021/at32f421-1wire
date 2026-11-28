@@ -36,12 +36,16 @@ extern uint32_t i2c_mock_sts2;
 extern uint32_t i2c_mock_gpio;
 extern uint8_t i2c_mock_dt;
 extern bool i2c_mock_recover_result;
+extern bool i2c_mock_stretch;
+extern uint32_t i2c_mock_reset_cause;
 
 void i2c_hw_mock_reset(void);
 void i2c_hw_mock_set_status(uint32_t sts1, uint32_t sts2, uint32_t gpio);
 void i2c_hw_mock_set_dt(uint8_t value);
 void i2c_hw_mock_set_cycles(uint32_t cycles);
 void i2c_hw_mock_set_recover_result(bool result);
+void i2c_hw_mock_set_stretch(bool enabled);
+void i2c_hw_mock_set_reset_cause(uint32_t cause);
 uint32_t i2c_hw_mock_count(uint8_t type);
 i2c_mock_event_t i2c_hw_mock_event(uint32_t index);
 

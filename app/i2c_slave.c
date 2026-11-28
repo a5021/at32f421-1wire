@@ -59,6 +59,10 @@ static int      pending_speed = -1;
 static bool     speed_apply_pending;
 static uint32_t speed_apply_at_cycles;
 static uint8_t  pending_cmd;
+static uint8_t  dispatch_cmd;
+static uint8_t  dispatch_select;
+static bool     dispatch_cmd_pending;
+static bool     dispatch_select_pending;
 static i2c_select_latch_t selected_latch;
 
 /* One-shot fault injection, armed through REG_FAULT. Used by the tester to
@@ -71,6 +75,8 @@ static uint8_t fault_current;
 static uint8_t forced_pullup;
 static uint8_t fault_edges;
 static uint8_t stall_armed;
+static bool     fault_unlocked;
+static uint32_t fault_unlock_at_cycles;
 static uint16_t tx_index;
 static uint16_t rx_bytes;
 
@@ -95,6 +101,9 @@ static uint8_t diag_start_cnt;
 static uint8_t diag_bus_cnt;
 static uint8_t diag_early_nack_cnt;
 static uint8_t diag_early_nack_pos;
+static uint8_t diag_hw_abort_count;
+static uint8_t diag_hw_abort_pos;
+static uint8_t diag_nack_pos;
 static uint8_t diag_start_latched;
 static uint8_t diag_bus_latched;
 static uint8_t diag_ouf_count;
@@ -182,6 +191,12 @@ static uint8_t reg_byte(uint32_t addr)
         return diag_early_nack_cnt;
     case REG_DIAG_EARLY_NACK_POS:
         return diag_early_nack_pos;
+    case REG_DIAG_ABORT:
+        return diag_hw_abort_count;
+    case REG_DIAG_ABORT_POS:
+        return diag_hw_abort_pos;
+    case REG_DIAG_NACK_POS:
+        return diag_nack_pos;
     case REG_MAX_STEP: {
         uint32_t us = max_cycles / cycles_per_us;
 
@@ -239,6 +254,8 @@ static void health_clear(void)
     }
     fault_edges = 0u;
     stall_armed = 0u;
+    fault_unlocked = false;
+    fault_unlock_at_cycles = 0u;
     tx_index = 0u;
     rx_bytes = 0u;
     diag_misdecode = 0u;
@@ -253,6 +270,9 @@ static void health_clear(void)
     diag_bus_cnt = 0u;
     diag_early_nack_cnt = 0u;
     diag_early_nack_pos = 0u;
+    diag_hw_abort_count = 0u;
+    diag_hw_abort_pos = 0u;
+    diag_nack_pos = 0u;
     diag_start_latched = 0u;
     diag_bus_latched = 0u;
 }
@@ -278,6 +298,9 @@ static void fault_apply(uint8_t code)
         break;
     case FAULT_STALL:
         stall_armed = 1u;
+        break;
+    case FAULT_ABORT:
+        fault_pending = code;
         break;
     default:
         break;
@@ -307,6 +330,8 @@ static void i2c_speed_idle_poll(void)
     speed_apply_pending = false;
 }
 
+static void i2c_abort_frame(void);
+
 /* Hand one snapshot byte to the master, applying a one-shot injected fault.
  * Both the address-match byte and the TDBE byte go through here. */
 static void i2c_send_byte(void)
@@ -325,6 +350,10 @@ static void i2c_send_byte(void)
         uint8_t fault = fault_next;
 
         fault_next = 0u;
+        if (fault == FAULT_ABORT) {
+            i2c_abort_frame();
+            return;
+        }
         if (fault == FAULT_BIT_FLIP) {
             value ^= 0x01u;
         } else if (fault == FAULT_SKIP_BYTE) {
@@ -363,9 +392,33 @@ static void i2c_stop_done(void)
         fault_pending = 0u;
     }
     if (pending_cmd != 0u) {
-        if (pending_cmd == 3u) {
+        dispatch_cmd = pending_cmd;
+        dispatch_cmd_pending = true;
+        pending_cmd = 0u;
+    }
+    if (pending_speed >= 0) {
+        /* Reinitialising I2C here can race the next START. The idle poll
+         * applies the change after a short quiet window. */
+        speed_apply_pending = true;
+        speed_apply_at_cycles = i2c_hw_cycles() + (50u * cycles_per_us);
+    }
+    if (i2c_select_latch_commit(&selected_latch, &dispatch_select)) {
+        dispatch_select_pending = true;
+    }
+}
+
+void i2c_slave_dispatch_pending(void)
+{
+    if (i2c_slave_busy()) {
+        return;
+    }
+    if (dispatch_cmd_pending) {
+        uint8_t cmd = dispatch_cmd;
+
+        dispatch_cmd_pending = false;
+        if (cmd == 3u) {
             health_clear();
-        } else if (pending_cmd == 7u) {
+        } else if (cmd == 7u) {
             max_cycles = 0u;
             max_state = 0u;
             pub_phase_max[0] = 0u;
@@ -378,26 +431,20 @@ static void i2c_stop_done(void)
             pub_phase_cnt[1] = 0u;
             pub_phase_cnt[2] = 0u;
         }
-        manager_command(pending_cmd);
-        pending_cmd = 0u;
+        manager_command(cmd);
     }
-    if (pending_speed >= 0) {
-        /* Reinitialising I2C here can race the next START. The idle poll
-         * applies the change after a short quiet window. */
-        speed_apply_pending = true;
-        speed_apply_at_cycles = i2c_hw_cycles() + (50u * cycles_per_us);
-    }
-    {
-        uint8_t selected;
-
-        if (i2c_select_latch_commit(&selected_latch, &selected)) {
-            manager_select(selected);
-        }
+    if (dispatch_select_pending) {
+        dispatch_select_pending = false;
+        manager_select(dispatch_select);
     }
 }
 
 static void i2c_abort_frame(void)
 {
+    if (diag_hw_abort_count != 0xFFu) {
+        diag_hw_abort_count++;
+    }
+    diag_hw_abort_pos = (uint8_t)tx_index;
     i2c_hw_abort();
 
     reg_ptr = 0u;
@@ -405,9 +452,12 @@ static void i2c_abort_frame(void)
     tx_mode = 0u;
     first_byte = 0u;
     pending_cmd = 0u;
+    dispatch_cmd_pending = false;
+    dispatch_select_pending = false;
     pending_speed = -1;
     speed_apply_pending = false;
     i2c_select_latch_abort(&selected_latch);
+    fault_unlocked = false;
     diag_start_latched = 0u;
     diag_bus_latched = 0u;
 }
@@ -449,6 +499,9 @@ static void i2c_poll_frame(void)
     }
 
     if ((sts1 & STS1_ACKFAIL) != 0u) {
+        if ((tx_index > 16u) && (tx_index < 255u)) {
+            diag_nack_pos = (uint8_t)tx_index;
+        }
         /* ACKFAIL alone is not proof that the master stopped reading; retain
          * tx_mode until STOPF or a new address match retires this frame. Full
          * 256-byte reads end at 256, and tester reads are at most 128 bytes. */
@@ -507,6 +560,11 @@ static void i2c_poll_frame(void)
         }
         diag_start_latched = 0u;
         diag_bus_latched = 0u;
+        /* A new address starts before the idle dispatcher can run. Commands
+         * and selections belong to the previous transaction and are dropped. */
+        dispatch_cmd_pending = false;
+        dispatch_select_pending = false;
+        i2c_select_latch_abort(&selected_latch);
         if ((sts2 & STS2_DIRF) != 0u) {
             tx_mode = 1;
             rx_mode = 0;
@@ -592,7 +650,18 @@ static void i2c_poll_frame(void)
             } else if (reg_ptr == REG_SELECTED) {
                 i2c_select_latch_write(&selected_latch, value);
             } else if (reg_ptr == REG_FAULT) {
-                fault_apply(value);
+                if (value == FAULT_UNLOCK_KEY) {
+                    fault_unlocked = true;
+                    fault_unlock_at_cycles = i2c_hw_cycles();
+                } else {
+                    uint32_t elapsed = i2c_hw_cycles() - fault_unlock_at_cycles;
+
+                    if (fault_unlocked &&
+                        (elapsed <= (FAULT_UNLOCK_WINDOW_US * cycles_per_us))) {
+                        fault_apply(value);
+                    }
+                    fault_unlocked = false;
+                }
             }
             reg_ptr = (reg_ptr + 1u) & 0xFFu;
         }
@@ -711,6 +780,8 @@ void i2c_slave_recover(uint32_t now_ms)
     tx_mode = 0u;
     first_byte = 0u;
     pending_cmd = 0u;
+    dispatch_cmd_pending = false;
+    dispatch_select_pending = false;
     pending_speed = -1;
     speed_apply_pending = false;
     i2c_select_latch_abort(&selected_latch);
@@ -724,6 +795,8 @@ void i2c_slave_recover(uint32_t now_ms)
     }
     fault_edges = 0u;
     stall_armed = 0u;
+    fault_unlocked = false;
+    fault_unlock_at_cycles = 0u;
     tx_index = 0u;
     diag_start_latched = 0u;
     diag_bus_latched = 0u;
@@ -753,14 +826,19 @@ void i2c_slave_set_cycles_per_us(uint32_t cycles)
     }
 }
 
-void i2c_slave_init(void)
+void i2c_slave_init(uint32_t reset_cause)
 {
     health_clear();
+    g_health |= reset_cause & (HEALTH_WDT_RESET | HEALTH_SW_RESET);
     reg_ptr = 0u;
     rx_mode = 0u;
     tx_mode = 0u;
     first_byte = 0u;
     pending_cmd = 0u;
+    dispatch_cmd = 0u;
+    dispatch_select = 0u;
+    dispatch_cmd_pending = false;
+    dispatch_select_pending = false;
     pending_speed = -1;
     speed_apply_pending = false;
     i2c_select_latch_abort(&selected_latch);

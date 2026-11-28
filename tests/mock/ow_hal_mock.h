@@ -44,6 +44,7 @@ typedef struct {
     uint8_t sp18[9];
     bool    sp_crc_bad;
     bool    converting;
+    bool    parasite;
     bool    force_no_presence;
 
     /* DS2431 */

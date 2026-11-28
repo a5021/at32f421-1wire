@@ -43,6 +43,11 @@ ow_status_t ds18b20_convert_poll(ds18b20_t *d);
 bool        ds18b20_read_start(ds18b20_t *d, const uint8_t *rom);
 ow_status_t ds18b20_read_poll(ds18b20_t *d);
 
+/* Read Power Supply (0xB4). Returns true when at least one selected DS18B20
+ * is parasite-powered; a Skip ROM read is the wired-AND of all replies. */
+bool        ds18b20_power_supply_start(ds18b20_t *d, const uint8_t *rom);
+ow_status_t ds18b20_power_supply_poll(ds18b20_t *d, bool *parasite);
+
 /* convert -> wait -> read in one state machine. */
 void        ds18b20_temp_start(ds18b20_t *d, const uint8_t *rom);
 ow_status_t ds18b20_temp_poll(ds18b20_t *d, int16_t *raw);

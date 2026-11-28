@@ -27,9 +27,10 @@ registers (pointer auto-increments, wraps at 0xFF).
 Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`), `REG_SELECTED` (`0x61`) and
 `REG_FAULT` (`0x62`) are writable; writes to any other address are ignored and
 the pointer still advances. `REG_SPEED`, `REG_CMD` and `REG_SELECTED` are
-latched at STOP and applied when the current transaction finishes. An aborted
-transfer (BUSERR/ARLOST/OUF) discards a latched command, speed change or
-selection. `REG_FAULT` arms the next transaction.
+latched at STOP and dispatched from the main loop at the next idle point. A new
+address arriving first drops that dispatch. An aborted transfer
+(BUSERR/ARLOST/OUF) also discards it. `REG_FAULT` requires unlock key `0xA5`
+followed by one fault code within 10 ms.
 
 ### Read (master → bridge)
 
@@ -37,8 +38,9 @@ The master first writes the register pointer (a write transaction with no
 data, or a combined write-then-read), then reads with address+R. The bridge
 returns the register value at the pointer, auto-incrementing on each byte.
 
-Use `REG_SEQ` (`0x08`) as a seqlock around a multi-byte read: read it
-before and after the map, retry if it changed or is odd.
+Use `REG_SEQ` (`0x08`) before and after a multi-byte read to observe a publish
+crossing. Each frame uses one snapshot, so a changed counter alone does not
+invalidate the payload; validate `REG_MAP_CRC`.
 
 ### Commands (`REG_CMD`)
 

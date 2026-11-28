@@ -1,7 +1,7 @@
 # AT32F421F8P7 1-Wire bridge — register map
 
 Canonical description of the I2C slave register file exposed by
-`app/main.c` (`g_regs[256]`). Addresses are byte offsets within the
+`app/i2c_slave.c` (`g_regs[256]`). Addresses are byte offsets within the
 `0x42` slave (7-bit address `0x42`, transmitted as `0x84` write /
 `0x85` read).
 
@@ -10,7 +10,7 @@ Canonical description of the I2C slave register file exposed by
 | Address | Size | Name | Meaning |
 |---------|------|------|---------|
 | `0x00` | 1 | `REG_MAGIC` | `0x5A` — sanity byte the master should check first |
-| `0x01` | 1 | `REG_VERSION` | Register-map version, `0x05` |
+| `0x01` | 1 | `REG_VERSION` | Register-map version, `0x06` |
 | `0x02` | 1 | `REG_FLAGS` | Status flags (see below) |
 | `0x03` | 1 | `REG_DEVICES` | Total devices found by search (may exceed 16) |
 | `0x04` | 1 | `REG_DS18B20` | DS18B20 count (may exceed 16) |
@@ -29,7 +29,8 @@ Canonical description of the I2C slave register file exposed by
 | `0x4B` | 1 | — | Reserved, reads `0x00`, covered by map CRC |
 | `0x4C..0x4D` | 2 | `REG_DIAG_START/BUS` | STARTF/BUSERR observed while a software frame was open, once per frame |
 | `0x4E..0x4F` | 2 | `REG_DIAG_EARLY_NACK*` | ACKFAIL after byte 128 but before the last map byte: event count and last `tx_index` |
-| `0x50..0x5F` | 16 | — | Reserved, reads `0x00`, covered by map CRC |
+| `0x50..0x52` | 3 | `REG_DIAG_ABORT/NACK_POS` | Hardware-abort count/position and last ACKFAIL after byte 16 but before byte 255 |
+| `0x53..0x5F` | 13 | — | Reserved, reads `0x00`, covered by map CRC |
 | `0x60` | 1 | `REG_CMD` | Command: `1` = rescan, `2` = reread DS2431, `3` = clear counters, `4` = pause, `5` = resume (writable) |
 | `0x61` | 1 | `REG_SELECTED` | Low nibble selects the sensor whose scratchpad is exposed; latched at STOP (writable) |
 | `0x62` | 1 | `REG_FAULT` | One-shot fault injection, see below (writable) |
@@ -59,6 +60,7 @@ Canonical description of the I2C slave register file exposed by
 | 3 | `0x08` | `FLAG_SNAPSHOT` | Register snapshot is valid |
 | 4 | `0x10` | `FLAG_EEPROM_OK` | DS2431 read succeeded |
 | 5 | `0x20` | `FLAG_TEMP_ERROR` | At least one temperature error this cycle |
+| 6 | `0x40` | `FLAG_BUS_PARASITE` | Read Power Supply found at least one parasite-powered DS18B20 |
 
 ## Invalid-slot markers
 
@@ -74,10 +76,10 @@ another family:
 
 ## Snapshot consistency
 
-`REG_SEQ` is a one-byte seqlock. `publish()` writes an odd value, updates
-the snapshot, then writes the next even value. A master should read
-`REG_SEQ`, read the map, read `REG_SEQ` again, and retry if the two differ
-or the value is odd. This detects a publish that overlaps the transfer.
+`REG_SEQ` is a one-byte publish counter. A master can read it before and after
+the map to observe a publish crossing. Each I2C frame is served from one
+snapshot, so a changed counter alone does not invalidate the payload; the map
+CRC is authoritative.
 
 ## Bus health (`0x09..0x0E`)
 
@@ -99,11 +101,14 @@ the four bytes cannot tear and no seqlock is needed.
 | 3 | `0x08` | `HEALTH_SDA_STUCK` | Production build: SDA held low for 10 ms with no matched address |
 | 4 | `0x10` | `HEALTH_RECOVERED` | Production build: nine-clock recovery released SDA and SCL |
 | 5 | `0x20` | `HEALTH_RECOVERY_FAILED` | Production build: SCL or SDA remained low after recovery |
+| 6 | `0x40` | `HEALTH_WDT_RESET` | Latched from `CRM.WDTRSTF` at boot |
+| 7 | `0x80` | `HEALTH_SW_RESET` | Latched from `CRM.SWRSTF` at boot |
 
 `ARLOST` has no counter on purpose: with one master it is already a
 pathological event, so the flag is enough and a rate would add nothing.
 
-The flags are sticky. Production builds enable SDA-stuck recovery and a
+The flags are sticky, including the boot reset-cause bits. Production builds
+enable SDA-stuck recovery and a
 1 s open-frame watchdog. The SDA detector ignores frames where the slave is
 waiting for received data or still has queued transmit data, so a legal master
 pause between bytes is not treated as a fault. The watchdog uses the last
@@ -122,9 +127,9 @@ for retry diagnostics.
 
 ## Fault injection (`REG_FAULT`)
 
-`REG_FAULT` accepts one code per write and fires once, on the next
-transaction. It exists so a test can prove that corruption is detected
-rather than silently accepted.
+`REG_FAULT` is disabled until the master writes unlock key `0xA5`, then writes
+one fault code within 10 ms. The unlock is consumed by the code write. This
+prevents an untrusted I2C master from arming production fault injection.
 
 | Code | Effect |
 |------|--------|
@@ -136,6 +141,7 @@ rather than silently accepted.
 | 6 | hold the 1-Wire strong pull-up for the whole frame |
 | 7 | run 64 1-Wire bit slots during the frame (64 x 165 us = 10.56 ms) |
 | 8 | stall the CPU at byte 64 of the frame for `(REG_SELECTED & 0x0F) * 20` us, minimum 20 us, maximum 300 us |
+| 9 | cycle `I2CEN` during an active read and abort the frame |
 
 Codes 4 and 5 give a digital ground truth for the health metric. Code 8 is a
 latency injection. With clock stretching enabled a 200 us stall did not corrupt
@@ -160,6 +166,7 @@ computing the same CRC:
 | `0x49..0x4A` | live STOPF-gate diagnostics |
 | `0x4C..0x4D` | live STARTF/BUSERR diagnostics |
 | `0x4E..0x4F` | live early-NACK diagnostics |
+| `0x50..0x52` | live hardware-abort and ACKFAIL-position diagnostics |
 | `0x60..0x6F` | command latch, selection, fault, the CRC itself and the live diagnostics |
 | `0x79..0x7F` | worst-step and EEPROM timing counters, live |
 
@@ -171,9 +178,11 @@ guarantees the CRC matches.
 
 Only `REG_SPEED` (`0x0F`), `REG_CMD` (`0x60`), `REG_SELECTED` (`0x61`) and
 `REG_FAULT` (`0x62`) accept writes. `REG_SPEED`, `REG_CMD` and
-`REG_SELECTED` are latched at STOP and applied when the current transaction
-finishes; an aborted transfer (BUSERR/ARLOST/OUF) discards the pending command,
-speed change or selection. `REG_FAULT` arms the next transaction.
+`REG_SELECTED` are latched at STOP and dispatched from the main loop at the
+next idle point, not synchronously between STOP and the next address. If a new
+address arrives first, the previous transaction's pending dispatch is dropped.
+An aborted transfer (BUSERR/ARLOST/OUF) also discards it. `REG_FAULT` requires
+the unlock handshake described above.
 
 The health block is read-only. Its values are injected when a byte is
 handed to the master, because `publish()` rebuilds `g_regs` from scratch on
@@ -196,7 +205,6 @@ scratchpad marker when out of range (T55).
 
 ## Source of truth
 
-Register constants live in `src/manager.h` and are mirrored in
-`app/main.c`, `tools/onewire_demo.py` and the RP2040 tester
-(`tools/rp2040-tester/src/regmap.h`). Keep all copies in sync when the
+Register constants live in `src/manager.h` and are mirrored in the RP2040
+tester (`tools/rp2040-tester/src/regmap.h`). Keep all copies in sync when the
 map changes.

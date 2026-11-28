@@ -19,6 +19,7 @@ uint16_t map_crc16(const uint8_t *map)
             ((i >= (int)REG_DIAG_GATE) && (i <= (int)REG_DIAG_GATE_POS)) ||
             ((i >= (int)REG_DIAG_START) && (i <= (int)REG_DIAG_BUS)) ||
             ((i >= (int)REG_DIAG_EARLY_NACK) && (i <= (int)REG_DIAG_EARLY_NACK_POS)) ||
+            ((i >= (int)REG_DIAG_ABORT) && (i <= (int)REG_DIAG_NACK_POS)) ||
             ((i >= (int)REG_MAX_STEP) && (i <= (int)REG_EEP_POLL))) {
             continue;
         }

@@ -8,10 +8,44 @@ static const uint8_t rom[8] = {
     0x28, 0x7F, 0x1E, 0x5B, 0x16, 0x03, 0x00, 0xFE
 };
 
+static ow_status_t run_power(ds18b20_t *temp, bool *parasite)
+{
+    int guard = 200;
+    ow_status_t st;
+
+    *parasite = true;
+    if (!ds18b20_power_supply_start(temp, 0)) {
+        return OW_PARAM;
+    }
+    while (((st = ds18b20_power_supply_poll(temp, parasite)) == OW_BUSY) &&
+           (guard-- > 0)) {
+    }
+    return st;
+}
+
 void test_state_run(void)
 {
     ds2431_t eep;
     ds18b20_t temp;
+    bool parasite;
+
+    /* Read Power Supply: external-only and mixed wired-AND replies. */
+    mock_reset();
+    (void)mock_add(MOCK_DS18B20, rom);
+    mock_dev(0)->parasite = false;
+    ds18b20_init(&temp, true);
+    TF_CHECK_EQ(OW_OK, run_power(&temp, &parasite));
+    TF_CHECK(!parasite);
+    TF_CHECK(!mock_strong());
+
+    mock_reset();
+    (void)mock_add(MOCK_DS18B20, rom);
+    mock_dev(0)->parasite = false;
+    (void)mock_add(MOCK_DS18B20, rom);
+    mock_dev(1)->parasite = true;
+    ds18b20_init(&temp, false);
+    TF_CHECK_EQ(OW_OK, run_power(&temp, &parasite));
+    TF_CHECK(parasite);
 
     /* Injecting two BUSY polls per pass delays completion by exactly two. */
     mock_reset();

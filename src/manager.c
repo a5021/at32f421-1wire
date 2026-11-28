@@ -41,6 +41,8 @@ static uint8_t  pause_requested;
 static uint8_t  paused;
 static uint32_t search_started;
 static uint32_t convert_started;
+static uint32_t power_started;
+static bool     bus_parasite = true;
 static uint32_t read_started;
 static uint32_t read_dev;
 static uint32_t read_sensor;
@@ -63,7 +65,7 @@ static uint8_t  rescan_auto;        /* this search was periodic, keep readings *
 /* Latched by the I2C bridge at STOP; consumed by manager_poll(). */
 static uint32_t g_cmd;
 
-/* Shared register file, visible to app/main.c through the extern in
+/* Shared register file, visible to app/i2c_slave.c through the extern in
  * manager.h. */
 uint8_t  g_regs[256] __attribute__((aligned(4)));
 volatile uint32_t g_i2c_speed = 0;
@@ -145,6 +147,8 @@ void manager_init(void)
 
     manager_state = MGR_SEARCH;
     search_started = 0;
+    power_started = 0;
+    bus_parasite = true;
     roms_dirty = 1;
     g_cmd = 0u;                 /* a latched command belongs to no session */
 }
@@ -202,6 +206,7 @@ static bool crc_skip(uint32_t i)
            ((i >= REG_DIAG_GATE) && (i <= REG_DIAG_GATE_POS)) ||
            ((i >= REG_DIAG_START) && (i <= REG_DIAG_BUS)) ||
            ((i >= REG_DIAG_EARLY_NACK) && (i <= REG_DIAG_EARLY_NACK_POS)) ||
+           ((i >= REG_DIAG_ABORT) && (i <= REG_DIAG_NACK_POS)) ||
            ((i >= REG_MAX_STEP) && (i <= REG_EEP_POLL));
 }
 
@@ -237,6 +242,9 @@ static void publish_fill(uint8_t *dst)
     }
     if (err_count != 0u) {
         flags |= FLAG_TEMP_ERROR;
+    }
+    if (bus_parasite) {
+        flags |= FLAG_BUS_PARASITE;
     }
 
     cycle_next = (uint16_t)(cycle + 1u);
@@ -453,6 +461,9 @@ static void manager_search(void)
         memcpy(roms, roms_next, sizeof(roms));
         device_count = search_next_count;
         ds18b20_count = search_next_ds;
+        if (ds18b20_count == 0u) {
+            bus_parasite = false;
+        }
         search_done = 1;
         roms_dirty = 1;
     } else {
@@ -463,7 +474,7 @@ static void manager_search(void)
         clear_results();
     }
     rescan_auto = 0u;
-    manager_state = (ds18b20_count != 0u && search_error == 0u) ? MGR_CONVERT
+    manager_state = (ds18b20_count != 0u && search_error == 0u) ? MGR_POWER
                                                                : MGR_EEPROM;
 }
 
@@ -505,6 +516,42 @@ void manager_poll(void)
     switch (manager_state) {
     case MGR_SEARCH:
         manager_search();
+        break;
+
+    case MGR_POWER:
+        if (power_started == 0u) {
+            if (ow_hal_busy()) {
+                return;
+            }
+            if (!ds18b20_power_supply_start(&sensor, 0)) {
+                last_error = OW_PARAM;
+                err_count++;
+                manager_state = MGR_CONVERT;
+                return;
+            }
+            power_started = 1u;
+            return;
+        } else {
+            bool parasite = true;
+
+            st = ds18b20_power_supply_poll(&sensor, &parasite);
+            if (st == OW_BUSY) {
+                return;
+            }
+            power_started = 0u;
+            if (st == OW_OK) {
+                bus_parasite = parasite;
+            } else {
+                /* Conservative fallback: an unknown bus may contain parasite
+                 * sensors, so keep strong pull-up available for this cycle. */
+                bus_parasite = true;
+                last_error = (uint32_t)st;
+                err_count++;
+            }
+            ds18b20_init(&sensor, bus_parasite);
+            convert_started = 0u;
+            manager_state = MGR_CONVERT;
+        }
         break;
 
     case MGR_CONVERT:

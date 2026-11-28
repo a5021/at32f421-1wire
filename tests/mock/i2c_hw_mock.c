@@ -5,6 +5,8 @@
 
 #define MOCK_ADDRF  0x00000002u
 #define MOCK_STOPF  0x00000010u
+#define MOCK_RDBF   0x00000040u
+#define MOCK_TDBE   0x00000080u
 #define MOCK_BUSYF  0x00000002u
 
 i2c_mock_event_t i2c_mock_events[I2C_MOCK_MAX_EVENTS];
@@ -16,6 +18,8 @@ uint32_t i2c_mock_sts2;
 uint32_t i2c_mock_gpio;
 uint8_t i2c_mock_dt;
 bool i2c_mock_recover_result;
+bool i2c_mock_stretch;
+uint32_t i2c_mock_reset_cause;
 
 static void record(uint8_t type, uint32_t a, uint32_t b)
 {
@@ -37,6 +41,8 @@ void i2c_hw_mock_reset(void)
     i2c_mock_gpio = 0x00000003u;
     i2c_mock_dt = 0u;
     i2c_mock_recover_result = true;
+    i2c_mock_stretch = true;
+    i2c_mock_reset_cause = 0u;
 }
 
 void i2c_hw_mock_set_status(uint32_t sts1, uint32_t sts2, uint32_t gpio)
@@ -44,6 +50,10 @@ void i2c_hw_mock_set_status(uint32_t sts1, uint32_t sts2, uint32_t gpio)
     i2c_mock_sts1 = sts1;
     i2c_mock_sts2 = sts2;
     i2c_mock_gpio = gpio;
+    if (i2c_mock_stretch &&
+        ((sts1 & (MOCK_RDBF | MOCK_TDBE)) != 0u)) {
+        i2c_mock_gpio &= ~0x00000001u;
+    }
 }
 
 void i2c_hw_mock_set_dt(uint8_t value)
@@ -59,6 +69,16 @@ void i2c_hw_mock_set_cycles(uint32_t cycles)
 void i2c_hw_mock_set_recover_result(bool result)
 {
     i2c_mock_recover_result = result;
+}
+
+void i2c_hw_mock_set_stretch(bool enabled)
+{
+    i2c_mock_stretch = enabled;
+}
+
+void i2c_hw_mock_set_reset_cause(uint32_t cause)
+{
+    i2c_mock_reset_cause = cause;
 }
 
 uint32_t i2c_hw_mock_count(uint8_t type)
@@ -92,6 +112,14 @@ void i2c_hw_init(uint32_t scl_hz)
     i2c_mock_sts2 = 0u;
 }
 
+uint32_t i2c_hw_reset_cause(void)
+{
+    uint32_t cause = i2c_mock_reset_cause;
+
+    i2c_mock_reset_cause = 0u;
+    return cause;
+}
+
 uint32_t i2c_hw_sts1(void)
 {
     record(MOCK_EVT_STS1, i2c_mock_sts1, 0u);
@@ -114,6 +142,10 @@ uint32_t i2c_hw_gpio_idt(void)
 uint8_t i2c_hw_dt_read(void)
 {
     record(MOCK_EVT_DT_READ, i2c_mock_dt, 0u);
+    i2c_mock_sts1 &= ~MOCK_RDBF;
+    if (i2c_mock_stretch) {
+        i2c_mock_gpio |= 0x00000001u;
+    }
     return i2c_mock_dt;
 }
 
@@ -121,6 +153,10 @@ void i2c_hw_dt_write(uint8_t value)
 {
     record(MOCK_EVT_DT_WRITE, value, 0u);
     i2c_mock_dt = value;
+    i2c_mock_sts1 &= ~MOCK_TDBE;
+    if (i2c_mock_stretch) {
+        i2c_mock_gpio |= 0x00000001u;
+    }
 }
 
 void i2c_hw_clear_flags(uint32_t flags)
@@ -139,6 +175,7 @@ void i2c_hw_abort(void)
     record(MOCK_EVT_ABORT, 0u, 0u);
     i2c_mock_dt = 0xFFu;
     i2c_mock_sts1 = 0u;
+    i2c_mock_gpio = 0x00000003u;
 }
 
 void i2c_hw_apply_speed(uint32_t scl_hz)
